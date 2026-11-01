@@ -29,16 +29,8 @@ impl RenameWorkspace {
         let mut pane_id_to_workspace = HashMap::new();
 
         for tabroot in panes.tabs {
-            let mut cursor = tabroot.into_tree().cursor();
-
-            loop {
-                if let Some(entry) = cursor.leaf_mut() {
-                    pane_id_to_workspace.insert(entry.pane_id, entry.workspace.to_string());
-                }
-                match cursor.preorder_next() {
-                    Ok(c) => cursor = c,
-                    Err(_) => break,
-                }
+            for entry in super::collect_pane_entries(tabroot) {
+                pane_id_to_workspace.insert(entry.pane_id, entry.workspace.to_string());
             }
         }
 

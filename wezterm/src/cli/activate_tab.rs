@@ -54,25 +54,17 @@ impl ActivateTab {
         let mut window_by_tab_id = HashMap::new();
 
         for tabroot in panes.tabs {
-            let mut cursor = tabroot.into_tree().cursor();
-
-            loop {
-                if let Some(entry) = cursor.leaf_mut() {
-                    pane_id_to_tab_id.insert(entry.pane_id, entry.tab_id);
-                    if entry.is_active_pane {
-                        tab_id_to_active_pane_id.insert(entry.tab_id, entry.pane_id);
-                    }
-                    window_by_tab_id.insert(entry.tab_id, entry.window_id);
-                    let win = tabs_by_window
-                        .entry(entry.window_id)
-                        .or_insert_with(Vec::new);
-                    if win.last().copied() != Some(entry.tab_id) {
-                        win.push(entry.tab_id);
-                    }
+            for entry in super::collect_pane_entries(tabroot) {
+                pane_id_to_tab_id.insert(entry.pane_id, entry.tab_id);
+                if entry.is_active_pane {
+                    tab_id_to_active_pane_id.insert(entry.tab_id, entry.pane_id);
                 }
-                match cursor.preorder_next() {
-                    Ok(c) => cursor = c,
-                    Err(_) => break,
+                window_by_tab_id.insert(entry.tab_id, entry.window_id);
+                let win = tabs_by_window
+                    .entry(entry.window_id)
+                    .or_insert_with(Vec::new);
+                if win.last().copied() != Some(entry.tab_id) {
+                    win.push(entry.tab_id);
                 }
             }
         }

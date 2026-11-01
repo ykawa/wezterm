@@ -42,6 +42,26 @@ impl std::str::FromStr for CliOutputFormatKind {
     }
 }
 
+pub(crate) fn collect_pane_entries(tabroot: mux::tab::TabEntry) -> Vec<mux::tab::PaneEntry> {
+    fn collect(node: mux::tab::PaneNode, entries: &mut Vec<mux::tab::PaneEntry>) {
+        match node {
+            mux::tab::PaneNode::Empty => {}
+            mux::tab::PaneNode::Split { left, right, .. } => {
+                collect(*left, entries);
+                collect(*right, entries);
+            }
+            mux::tab::PaneNode::Leaf(entry) => entries.push(entry),
+        }
+    }
+
+    let mut entries = vec![];
+    collect(tabroot.panes, &mut entries);
+    for floating_pane in tabroot.floating_panes {
+        collect(floating_pane, &mut entries);
+    }
+    entries
+}
+
 #[derive(Debug, Parser, Clone, Copy)]
 struct CliOutputFormat {
     /// Controls the output format.
@@ -106,7 +126,7 @@ Outputs the pane-id for the newly created pane on success"
     #[command(
         name = "spawn",
         trailing_var_arg = true,
-        about = "Spawn a command into a new window or tab
+        about = "Spawn a command into a new window, tab or floating pane
 Outputs the pane-id for the newly created pane on success"
     )]
     SpawnCommand(spawn_command::SpawnCommand),

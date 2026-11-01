@@ -93,65 +93,29 @@ impl crate::TermWindow {
         let white_space = gl_state.util_sprites.white_space.texture_coords();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
-        let window_is_transparent =
-            !self.window_background.is_empty() || config.window_background_opacity != 1.0;
+        let window_is_transparent = !pos.is_floating
+            && (!self.window_background.is_empty() || config.window_background_opacity != 1.0);
 
         let default_bg = palette
             .resolve_bg(ColorAttribute::Default)
             .to_linear()
-            .mul_alpha(if window_is_transparent {
+            .mul_alpha(if pos.is_floating {
+                1.0
+            } else if window_is_transparent {
                 0.
             } else {
                 config.text_background_opacity
             });
 
-        let cell_width = self.render_metrics.cell_size.width as f32;
-        let cell_height = self.render_metrics.cell_size.height as f32;
-        let background_rect = {
-            // We want to fill out to the edges of the splits
-            let (x, width_delta) = if pos.left == 0 {
-                (
-                    0.,
-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
-                )
-            } else {
-                (
-                    padding_left + border.left.get() as f32 - (cell_width / 2.0)
-                        + (pos.left as f32 * cell_width),
-                    cell_width,
-                )
-            };
+        let background_rect = self.compute_background_rect_with_scrollbar(
+            &pos,
+            padding_left,
+            padding_top,
+            &border,
+            top_pixel_y,
+        );
 
-            let (y, height_delta) = if pos.top == 0 {
-                (
-                    (top_pixel_y - padding_top),
-                    padding_top + (cell_height / 2.0),
-                )
-            } else {
-                (
-                    top_pixel_y + (pos.top as f32 * cell_height) - (cell_height / 2.0),
-                    cell_height,
-                )
-            };
-            euclid::rect(
-                x,
-                y,
-                // Go all the way to the right edge if we're right-most
-                if pos.left + pos.width >= self.terminal_size.cols as usize {
-                    self.dimensions.pixel_width as f32 - x
-                } else {
-                    (pos.width as f32 * cell_width) + width_delta
-                },
-                // Go all the way to the bottom if we're bottom-most
-                if pos.top + pos.height >= self.terminal_size.rows as usize {
-                    self.dimensions.pixel_height as f32 - y
-                } else {
-                    (pos.height as f32 * cell_height) + height_delta as f32
-                },
-            )
-        };
-
-        if self.window_background.is_empty() {
+        if self.window_background.is_empty() || pos.is_floating {
             // Per-pane, palette-specified background
 
             let mut quad = self
@@ -162,7 +126,11 @@ impl crate::TermWindow {
                     palette
                         .background
                         .to_linear()
-                        .mul_alpha(config.window_background_opacity),
+                        .mul_alpha(if pos.is_floating {
+                            1.0
+                        } else {
+                            config.window_background_opacity
+                        }),
                 )
                 .context("filled_rectangle")?;
             quad.set_hsv(if pos.is_active {
@@ -226,28 +194,48 @@ impl crate::TermWindow {
         // do a per-pane scrollbar.  That will require more extensive
         // changes to ScrollHit, mouse positioning, PositionedPane
         // and tab size calculation.
-        if pos.is_active && self.show_scroll_bar {
-            let thumb_y_offset = top_bar_height as usize + border.top.get();
+        if pos.is_active
+            && self.show_scroll_bar
+            && (!self.is_floating_pane_active() || pos.is_floating)
+        {
+            let padding = self.effective_right_padding(&config) as f32;
+            let (thumb_y_offset, temp_bottom, thumb_x) = if self.is_floating_pane_active() {
+                let pos_y = background_rect.origin.y;
+                let pixel_height = background_rect.size.height;
+                let x = background_rect.width() + background_rect.origin.x - padding;
+                (
+                    pos_y as usize,
+                    pos_y as usize + pixel_height as usize,
+                    x as usize,
+                )
+            } else {
+                let win_y_offset = top_bar_height as usize;
+                let win_bottom = self
+                    .dimensions
+                    .pixel_height
+                    .saturating_sub(border.bottom.get() + bottom_bar_height as usize);
+                let x = self.dimensions.pixel_width - padding as usize - border.right.get();
+                (win_y_offset + border.top.get(), win_bottom, x)
+            };
 
             let min_height = self.min_scroll_bar_height();
 
             let info = ScrollHit::thumb(
                 &*pos.pane,
                 current_viewport,
-                self.dimensions.pixel_height.saturating_sub(
-                    thumb_y_offset + border.bottom.get() + bottom_bar_height as usize,
-                ),
+                temp_bottom.saturating_sub(thumb_y_offset),
                 min_height as usize,
             );
+
+            let scroll_height = info.height;
+
             let abs_thumb_top = thumb_y_offset + info.top;
-            let thumb_size = info.height;
+            let thumb_size = scroll_height;
             let color = palette.scrollbar_thumb.to_linear();
 
             // Adjust the scrollbar thumb position
             let config = &self.config;
             let padding = self.effective_right_padding(&config) as f32;
-
-            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get();
 
             // Register the scroll bar location
             self.ui_items.push(UIItem {
@@ -261,17 +249,14 @@ impl crate::TermWindow {
                 x: thumb_x,
                 width: padding as usize,
                 y: abs_thumb_top,
-                height: thumb_size,
+                height: scroll_height,
                 item_type: UIItemType::ScrollThumb,
             });
             self.ui_items.push(UIItem {
                 x: thumb_x,
                 width: padding as usize,
                 y: abs_thumb_top + thumb_size,
-                height: self
-                    .dimensions
-                    .pixel_height
-                    .saturating_sub(abs_thumb_top + thumb_size),
+                height: temp_bottom.saturating_sub(abs_thumb_top + thumb_size),
                 item_type: UIItemType::BelowScrollThumb,
             });
 
@@ -282,7 +267,7 @@ impl crate::TermWindow {
                     thumb_x as f32,
                     abs_thumb_top as f32,
                     padding,
-                    thumb_size as f32,
+                    scroll_height as f32,
                 ),
                 color,
             )

@@ -267,8 +267,8 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
         for window_id in mux.iter_windows_in_workspace(ws) {
             if let Some(win) = mux.get_window(window_id) {
                 for t in win.iter_tabs() {
-                    for p in t.iter_panes_ignoring_zoom() {
-                        if p.pane.domain_id() == domain.domain_id() {
+                    for pane in t.iter_all_panes() {
+                        if pane.domain_id() == domain.domain_id() {
                             return true;
                         }
                     }
@@ -575,7 +575,15 @@ impl Publish {
 
                                 let mut window_id = None;
                                 'outer: for tabroot in panes.tabs {
-                                    let mut cursor = tabroot.into_tree().cursor();
+                                    for floating_pane in tabroot.floating_panes {
+                                        if let mux::tab::PaneNode::Leaf(entry) = floating_pane {
+                                            if entry.pane_id == pane_id {
+                                                window_id.replace(entry.window_id);
+                                                break 'outer;
+                                            }
+                                        }
+                                    }
+                                    let mut cursor = tabroot.panes.into_tree().cursor();
 
                                     loop {
                                         if let Some(entry) = cursor.leaf_mut() {
