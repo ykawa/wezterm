@@ -1848,6 +1848,11 @@ impl TabInner {
         if tiled_panes.len() == 1 {
             anyhow::bail!("cannot convert the last tiled pane to a floating pane");
         }
+        if let Some(zoomed) = &self.zoomed {
+            if zoomed.pane_id() != pane_id {
+                anyhow::bail!("cannot convert a pane to floating while another pane is zoomed");
+            }
+        }
 
         let original_size = if self.zoomed.as_ref().map(|pane| pane.pane_id()) == Some(pane_id) {
             self.size
@@ -2908,6 +2913,36 @@ mod test {
         let same_pane: Arc<dyn Pane> = target.clone();
         assert!(Arc::ptr_eq(&floating, &same_pane));
         assert_eq!(*target.resize_attempts.lock(), 1);
+        assert!(tab.floating_pane_is_visible());
+    }
+
+    #[test]
+    fn floating_conversion_rejects_another_zoomed_pane_without_resizing() {
+        let (tab, target) = tiled_conversion_fixture();
+        let other = tab.iter_panes_ignoring_zoom()[0].pane.clone();
+        tab.inner.lock().zoomed = Some(other.clone());
+        let original_size = *target.size.lock();
+        let err = tab.move_pane_to_floating_pane(target.id).unwrap_err();
+
+        assert!(err.to_string().contains("another pane is zoomed"));
+        assert_eq!(*target.resize_attempts.lock(), 0);
+        assert_eq!(*target.size.lock(), original_size);
+        assert_eq!(tab.iter_panes_ignoring_zoom().len(), 2);
+        assert!(!tab.has_floating_pane());
+        assert!(Arc::ptr_eq(&tab.get_zoomed_pane().unwrap(), &other));
+    }
+
+    #[test]
+    fn floating_conversion_of_the_zoomed_target_unzooms_and_keeps_same_pane() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.set_zoomed(true);
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+
+        assert!(tab.get_zoomed_pane().is_none());
+        assert_eq!(tab.iter_panes_ignoring_zoom().len(), 1);
+        let (_, floating) = tab.get_floating_pane_by_pane_id(target.id).unwrap();
+        let same_pane: Arc<dyn Pane> = target.clone();
+        assert!(Arc::ptr_eq(&floating, &same_pane));
         assert!(tab.floating_pane_is_visible());
     }
 
