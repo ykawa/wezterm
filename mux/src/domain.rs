@@ -86,13 +86,16 @@ pub trait Domain: Downcast + Send + Sync {
 
         let size = tab.compute_floating_pane_size();
         let pane = self.spawn_pane(size, command_builder, command_dir).await?;
-        tab.add_floating_pane(size, Arc::clone(&pane))?;
+        if let Err(err) = tab.add_floating_pane(size, Arc::clone(&pane)) {
+            mux.remove_pane(pane.pane_id());
+            return Err(err);
+        }
         Ok(pane)
     }
 
     async fn move_floating_pane_to_split(
         &self,
-        _tab: TabId,
+        _pane_id: PaneId,
         _direction: SplitDirection,
     ) -> anyhow::Result<bool> {
         Ok(false)

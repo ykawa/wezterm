@@ -863,10 +863,11 @@ impl Mux {
             }
         }
 
-        let mut pane_ids = vec![];
-        for pos in tab.iter_panes_ignoring_zoom() {
-            pane_ids.push(pos.pane.pane_id());
-        }
+        let pane_ids: Vec<_> = tab
+            .iter_all_panes()
+            .iter()
+            .map(|pane| pane.pane_id())
+            .collect();
         log::debug!("panes to remove: {pane_ids:?}");
         for pane_id in pane_ids {
             self.remove_pane_internal(pane_id);
@@ -884,8 +885,8 @@ impl Mux {
             // Gather all the domains referenced by this window
             let mut domains_of_window = HashSet::new();
             for tab in window.iter_tabs() {
-                for pane in tab.iter_panes_ignoring_zoom() {
-                    domains_of_window.insert(pane.pane.domain_id());
+                for pane in tab.iter_all_panes() {
+                    domains_of_window.insert(pane.domain_id());
                 }
             }
 
@@ -1321,7 +1322,7 @@ impl Mux {
         let (domain, _window_id, tab_id) = self.resolve_domain_from_pane_id(pane_id)?;
 
         if domain
-            .move_floating_pane_to_split(tab_id, direction)
+            .move_floating_pane_to_split(pane_id, direction)
             .await?
         {
             return Ok(());
@@ -1333,9 +1334,9 @@ impl Mux {
             None => anyhow::bail!("Invalid tab id {}", tab_id),
         };
 
-        let floating_pane = tab.remove_floating_pane(tab.get_active_floating_pane_index())?;
-
-        tab.set_floating_pane_visibility(false);
+        let (floating_index, floating_pane) = tab
+            .get_floating_pane_by_pane_id(pane_id)
+            .ok_or_else(|| anyhow!("pane {} is not a floating pane", pane_id))?;
 
         let split_request = SplitRequest {
             direction,
@@ -1348,6 +1349,8 @@ impl Mux {
             split_request,
             Arc::clone(&floating_pane),
         )?;
+        tab.remove_floating_pane(floating_index)?;
+        tab.set_floating_pane_visibility(false);
 
         Ok(())
     }
@@ -1397,6 +1400,14 @@ impl Mux {
             Some(t) => t,
             None => anyhow::bail!("Invalid tab id {}", src_tab),
         };
+
+        let tiled_panes = tab.iter_panes_ignoring_zoom();
+        if !tiled_panes.iter().any(|pos| pos.pane.pane_id() == pane_id) {
+            anyhow::bail!("pane {} is not a tiled pane", pane_id);
+        }
+        if tiled_panes.len() == 1 {
+            anyhow::bail!("cannot convert the last tiled pane to a floating pane");
+        }
 
         let pane = tab
             .remove_pane(pane_id)
