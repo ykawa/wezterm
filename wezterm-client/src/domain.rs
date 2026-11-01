@@ -49,8 +49,8 @@ impl ClientInner {
             .retain(
                 |remote_tab_id, local_tab_id| match mux.get_tab(*local_tab_id) {
                     Some(tab) => {
-                        for pos in tab.iter_panes_ignoring_zoom() {
-                            if pos.pane.domain_id() == self.local_domain_id {
+                        for pane in tab.iter_all_panes() {
+                            if pane.domain_id() == self.local_domain_id {
                                 return true;
                             }
                         }
@@ -73,8 +73,8 @@ impl ClientInner {
                 |_remote_window_id, local_window_id| match mux.get_window(*local_window_id) {
                     Some(w) => {
                         for tab in w.iter_tabs() {
-                            for pos in tab.iter_panes_ignoring_zoom() {
-                                if pos.pane.domain_id() == self.local_domain_id {
+                            for pane in tab.iter_all_panes() {
+                                if pane.domain_id() == self.local_domain_id {
                                     return true;
                                 }
                             }
@@ -1054,6 +1054,9 @@ impl Domain for ClientDomain {
         let local_pane = mux
             .get_pane(pane_id)
             .ok_or_else(|| anyhow!("pane_id {} is invalid", pane_id))?;
+        if local_pane.domain_id() != self.local_domain_id {
+            bail!("pane_id {} belongs to a different domain", pane_id);
+        }
         let client_pane = local_pane
             .downcast_ref::<ClientPane>()
             .ok_or_else(|| anyhow!("pane_id {} is not a ClientPane", pane_id))?;
