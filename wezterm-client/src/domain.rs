@@ -29,6 +29,38 @@ pub struct ClientInner {
     pub focused_remove_floating_pane_id: Mutex<Option<PaneId>>,
 }
 
+// A remote spawn has already succeeded. If its local registration fails,
+// await cleanup rather than leaving an invisible process on the server.
+async fn register_spawned_floating_pane<F, C>(
+    register: F,
+    cleanup: C,
+    domain_name: &str,
+    remote_pane_id: PaneId,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<()>,
+    C: std::future::Future<Output = anyhow::Result<()>>,
+{
+    if let Err(err) = register() {
+        let context = match cleanup.await {
+            Ok(()) => format!(
+                "failed to register floating pane locally; closed remote pane {} in domain {:?}",
+                remote_pane_id, domain_name
+            ),
+            Err(cleanup_err) => {
+                let message = format!(
+                    "failed to register floating pane locally; cleanup of remote pane {} in domain {:?} also failed: {:#}",
+                    remote_pane_id, domain_name, cleanup_err
+                );
+                log::error!("{}; registration error: {:#}", message, err);
+                message
+            }
+        };
+        return Err(err.context(context));
+    }
+    Ok(())
+}
+
 impl ClientInner {
     fn remote_to_local_window(&self, remote_window_id: WindowId) -> Option<WindowId> {
         let map = self.remote_to_local_window.lock().unwrap();
@@ -1037,7 +1069,7 @@ impl Domain for ClientDomain {
 
     async fn add_floating_pane(
         &self,
-        _tab_id: TabId,
+        tab_id: TabId,
         pane_id: PaneId,
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
@@ -1049,8 +1081,8 @@ impl Domain for ClientDomain {
         let mux = Mux::get();
 
         let tab = mux
-            .get_tab(_tab_id)
-            .ok_or_else(|| anyhow!("tab_id {} is invalid", _tab_id))?;
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow!("tab_id {} is invalid", tab_id))?;
         let local_pane = mux
             .get_pane(pane_id)
             .ok_or_else(|| anyhow!("pane_id {} is invalid", pane_id))?;
@@ -1060,6 +1092,10 @@ impl Domain for ClientDomain {
         let client_pane = local_pane
             .downcast_ref::<ClientPane>()
             .ok_or_else(|| anyhow!("pane_id {} is not a ClientPane", pane_id))?;
+
+        if tab.get_zoomed_pane().is_some() {
+            bail!("cannot add floating pane while zoomed");
+        }
 
         let result = inner
             .client
@@ -1079,7 +1115,28 @@ impl Domain for ClientDomain {
             "wezterm",
         ));
 
-        tab.add_floating_pane(result.size, Arc::clone(&pane)).ok();
+        register_spawned_floating_pane(
+            || {
+                // The tab may have closed or become zoomed while awaiting
+                // the server. add_floating_pane checks the current zoom state.
+                if mux.get_tab(tab_id).is_none() {
+                    bail!("tab_id {} closed while spawning a floating pane", tab_id);
+                }
+                tab.add_floating_pane(result.size, Arc::clone(&pane))
+            },
+            async {
+                inner
+                    .client
+                    .kill_pane(codec::KillPane {
+                        pane_id: result.pane_id,
+                    })
+                    .await
+                    .map(|_| ())
+            },
+            self.domain_name(),
+            result.pane_id,
+        )
+        .await?;
 
         mux.add_pane(&pane)?;
 
@@ -1161,6 +1218,66 @@ impl Domain for ClientDomain {
             DomainState::Attached
         } else {
             DomainState::Detached
+        }
+    }
+}
+
+#[cfg(test)]
+mod floating_pane_registration_tests {
+    use super::register_spawned_floating_pane;
+    use std::cell::Cell;
+
+    #[test]
+    fn successful_registration_keeps_remote_pane() {
+        let cleanup_called = Cell::new(false);
+        smol::block_on(register_spawned_floating_pane(
+            || Ok(()),
+            async {
+                cleanup_called.set(true);
+                Ok(())
+            },
+            "test-mux",
+            42,
+        ))
+        .unwrap();
+        assert!(!cleanup_called.get());
+    }
+
+    #[test]
+    fn failed_registration_awaits_remote_cleanup_and_returns_original_error() {
+        let cleanup_finished = Cell::new(false);
+        let err = smol::block_on(register_spawned_floating_pane(
+            || anyhow::bail!("cannot add floating pane while zoomed"),
+            async {
+                // Ensure the cleanup is awaited through completion.
+                smol::Timer::after(std::time::Duration::from_millis(1)).await;
+                cleanup_finished.set(true);
+                Ok(())
+            },
+            "test-mux",
+            42,
+        ))
+        .unwrap_err();
+        assert!(cleanup_finished.get());
+        assert_eq!(
+            err.root_cause().to_string(),
+            "cannot add floating pane while zoomed"
+        );
+        assert!(err.to_string().contains("closed remote pane 42"));
+    }
+
+    #[test]
+    fn failed_cleanup_reports_domain_pane_and_both_errors() {
+        let err = smol::block_on(register_spawned_floating_pane(
+            || anyhow::bail!("tab closed"),
+            async { anyhow::bail!("connection lost") },
+            "test-mux",
+            42,
+        ))
+        .unwrap_err();
+        let message = format!("{:#}", err);
+        for expected in ["test-mux", "42", "connection lost", "tab closed"] {
+            assert!(message.contains(expected), "{}", message);
         }
     }
 }
