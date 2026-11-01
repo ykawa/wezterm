@@ -1401,23 +1401,7 @@ impl Mux {
             None => anyhow::bail!("Invalid tab id {}", src_tab),
         };
 
-        let tiled_panes = tab.iter_panes_ignoring_zoom();
-        if !tiled_panes.iter().any(|pos| pos.pane.pane_id() == pane_id) {
-            anyhow::bail!("pane {} is not a tiled pane", pane_id);
-        }
-        if tiled_panes.len() == 1 {
-            anyhow::bail!("cannot convert the last tiled pane to a floating pane");
-        }
-
-        let pane = tab
-            .remove_pane(pane_id)
-            .ok_or_else(|| anyhow::anyhow!("pane {} wasn't in its containing tab!?", pane_id))?;
-
-        let size = tab.compute_floating_pane_size();
-        pane.resize(size)?;
-        tab.append_floating_pane(pane);
-
-        Ok(())
+        tab.move_pane_to_floating_pane(pane_id)
     }
 
     pub async fn move_pane_to_new_tab(

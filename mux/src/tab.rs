@@ -703,6 +703,10 @@ impl Tab {
         self.inner.lock().remove_pane(pane_id)
     }
 
+    pub fn move_pane_to_floating_pane(&self, pane_id: PaneId) -> anyhow::Result<()> {
+        self.inner.lock().move_pane_to_floating_pane(pane_id)
+    }
+
     pub fn can_close_without_prompting(&self, reason: CloseReason) -> bool {
         self.inner.lock().can_close_without_prompting(reason)
     }
@@ -1835,6 +1839,52 @@ impl TabInner {
             .is_empty()
     }
 
+    fn move_pane_to_floating_pane(&mut self, pane_id: PaneId) -> anyhow::Result<()> {
+        let tiled_panes = self.iter_panes_ignoring_zoom();
+        let pos = tiled_panes
+            .iter()
+            .find(|pos| pos.pane.pane_id() == pane_id)
+            .ok_or_else(|| anyhow::anyhow!("pane {} is not a tiled pane", pane_id))?;
+        if tiled_panes.len() == 1 {
+            anyhow::bail!("cannot convert the last tiled pane to a floating pane");
+        }
+
+        let original_size = if self.zoomed.as_ref().map(|pane| pane.pane_id()) == Some(pane_id) {
+            self.size
+        } else {
+            TerminalSize {
+                rows: pos.height,
+                cols: pos.width,
+                pixel_width: pos.pixel_width,
+                pixel_height: pos.pixel_height,
+                dpi: self.size.dpi,
+            }
+        };
+        // Keep the pane in its tiled layout until the fallible resize succeeds.
+        // Holding the tab lock also keeps validation and the move together.
+        if let Err(err) = pos.pane.resize(self.compute_floating_pane_size(self.size)) {
+            // A resize can partially update a terminal before returning an error.
+            if let Err(restore_err) = pos.pane.resize(original_size) {
+                let context = format!(
+                    "pane {} remains tiled; restoring its size also failed: {:#}",
+                    pane_id, restore_err
+                );
+                log::error!("{}; floating resize error: {:#}", context, err);
+                return Err(err.context(context));
+            }
+            return Err(err.context(format!(
+                "could not resize pane {} for floating; tiled layout and size restored",
+                pane_id
+            )));
+        }
+
+        let pane = self
+            .remove_pane(pane_id)
+            .ok_or_else(|| anyhow::anyhow!("pane {} wasn't in its containing tab!?", pane_id))?;
+        self.append_floating_pane(pane);
+        Ok(())
+    }
+
     fn remove_pane(&mut self, pane_id: PaneId) -> Option<Arc<dyn Pane>> {
         let panes = self.remove_pane_if(|_, pane| pane.pane_id() == pane_id, false);
         for pane in panes {
@@ -2679,6 +2729,8 @@ mod test {
     struct FakePane {
         id: PaneId,
         size: Mutex<TerminalSize>,
+        resize_failures: Mutex<usize>,
+        resize_attempts: Mutex<usize>,
     }
 
     impl FakePane {
@@ -2686,6 +2738,8 @@ mod test {
             Arc::new(Self {
                 id,
                 size: Mutex::new(size),
+                resize_failures: Mutex::new(0),
+                resize_attempts: Mutex::new(0),
             })
         }
     }
@@ -2752,7 +2806,15 @@ mod test {
             unimplemented!()
         }
         fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
+            *self.resize_attempts.lock() += 1;
             *self.size.lock() = size;
+            let mut failures = self.resize_failures.lock();
+            if *failures > 0 {
+                *failures -= 1;
+                // Model a terminal that changed partially before failing.
+                self.size.lock().cols = 1;
+                anyhow::bail!("injected resize failure");
+            }
             Ok(())
         }
 
@@ -2783,6 +2845,70 @@ mod test {
         fn get_current_working_dir(&self, _policy: CachePolicy) -> Option<Url> {
             None
         }
+    }
+
+    fn tiled_conversion_fixture() -> (Tab, Arc<FakePane>) {
+        Mux::set_mux(&Arc::new(Mux::new(None)));
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(400, size));
+        let target = Arc::new(FakePane {
+            id: 401,
+            size: Mutex::new(size),
+            resize_failures: Mutex::new(0),
+            resize_attempts: Mutex::new(0),
+        });
+        let pane: Arc<dyn Pane> = target.clone();
+        tab.split_and_insert(0, SplitRequest::default(), pane)
+            .unwrap();
+        *target.resize_attempts.lock() = 0;
+        (tab, target)
+    }
+
+    #[test]
+    fn failed_floating_conversion_preserves_layout_and_restores_size() {
+        let (tab, target) = tiled_conversion_fixture();
+        let original_size = *target.size.lock();
+        let before = format!("{:?}", tab.iter_panes_ignoring_zoom());
+        *target.resize_failures.lock() = 1;
+        let err = tab.move_pane_to_floating_pane(target.id).unwrap_err();
+        assert_eq!(err.root_cause().to_string(), "injected resize failure");
+        assert_eq!(before, format!("{:?}", tab.iter_panes_ignoring_zoom()));
+        assert!(tab.get_floating_pane_by_pane_id(target.id).is_none());
+        assert_eq!(*target.size.lock(), original_size);
+        assert_eq!(*target.resize_attempts.lock(), 2);
+        let same_pane: Arc<dyn Pane> = target.clone();
+        assert!(Arc::ptr_eq(&tab.get_active_pane().unwrap(), &same_pane));
+    }
+
+    #[test]
+    fn failed_size_restoration_still_keeps_pane_tiled() {
+        let (tab, target) = tiled_conversion_fixture();
+        *target.resize_failures.lock() = 2;
+        let err = tab.move_pane_to_floating_pane(target.id).unwrap_err();
+        assert!(err.to_string().contains("restoring its size also failed"));
+        assert!(tab.contains_pane(target.id));
+        assert_eq!(tab.iter_panes_ignoring_zoom().len(), 2);
+        assert!(!tab.has_floating_pane());
+        assert_eq!(*target.resize_attempts.lock(), 2);
+    }
+
+    #[test]
+    fn successful_floating_conversion_moves_the_same_pane() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        assert_eq!(tab.iter_panes_ignoring_zoom().len(), 1);
+        let (_, floating) = tab.get_floating_pane_by_pane_id(target.id).unwrap();
+        let same_pane: Arc<dyn Pane> = target.clone();
+        assert!(Arc::ptr_eq(&floating, &same_pane));
+        assert_eq!(*target.resize_attempts.lock(), 1);
+        assert!(tab.floating_pane_is_visible());
     }
 
     #[test]
