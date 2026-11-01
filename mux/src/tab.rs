@@ -1099,10 +1099,8 @@ impl TabInner {
             let root_size = self.size;
             let size = self.compute_floating_pane_size(self.size);
 
-            let cell_height = root_size.pixel_height / root_size.rows;
-            let cell_width = root_size.pixel_width / root_size.cols;
-            let left = ((root_size.pixel_width - size.pixel_width) / 2) / cell_width;
-            let top = (root_size.pixel_height - size.pixel_height) / 2 / cell_height;
+            let left = root_size.cols.saturating_sub(size.cols) / 2;
+            let top = root_size.rows.saturating_sub(size.rows) / 2;
 
             Some(PositionedPane {
                 index: 0,
@@ -2839,6 +2837,31 @@ mod test {
         inner.zoomed = Some(floating_pane);
 
         assert!(!inner.is_floating_pane_active());
+    }
+
+    #[test]
+    fn floating_pane_position_handles_zero_pixel_dimensions() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+            dpi: 96,
+        };
+        let tab = Tab::new(&size);
+        let mut inner = tab.inner.lock();
+        inner.floating_panes.push(FakePane::new(202, size));
+        inner.floating_pane_visible = true;
+
+        let positioned = inner.get_active_floating_pane().unwrap();
+        assert_eq!(
+            positioned.left,
+            size.cols.saturating_sub(positioned.width) / 2
+        );
+        assert_eq!(
+            positioned.top,
+            size.rows.saturating_sub(positioned.height) / 2
+        );
     }
 
     #[test]
