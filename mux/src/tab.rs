@@ -2572,8 +2572,19 @@ impl TabInner {
                 (pane, existing_pane)
             };
 
-            pane1.resize(split_info.first)?;
-            pane2.resize(split_info.second.clone())?;
+            let resized = pane1
+                .resize(split_info.first)
+                .and_then(|_| pane2.resize(split_info.second.clone()));
+            if let Err(err) = resized {
+                // The cursor owns the tree while the resize is attempted.
+                // Restore it before returning, or subsequent layout queries
+                // and resizes would unwrap an empty self.pane.
+                self.pane.replace(cursor.tree());
+                // Best-effort resynchronize terminal sizes with the retained
+                // layout, including any floating source pane.
+                self.resize(self.size);
+                return Err(err.context("split resize failed; tab layout preserved"));
+            }
 
             *cursor.leaf_mut().unwrap() = pane1;
 
@@ -2930,6 +2941,50 @@ mod test {
         assert_eq!(tab.iter_panes_ignoring_zoom().len(), 2);
         assert!(!tab.has_floating_pane());
         assert!(Arc::ptr_eq(&tab.get_zoomed_pane().unwrap(), &other));
+    }
+
+    #[test]
+    fn failed_split_resize_keeps_tiled_and_floating_membership() {
+        for target_is_second in [true, false] {
+            for fail_existing in [true, false] {
+                let (tab, existing) = tiled_conversion_fixture();
+                let incoming = Arc::new(FakePane {
+                    id: 402,
+                    size: Mutex::new(tab.compute_floating_pane_size()),
+                    resize_failures: Mutex::new(0),
+                    resize_attempts: Mutex::new(0),
+                });
+                let floating: Arc<dyn Pane> = incoming.clone();
+                tab.append_floating_pane(floating.clone());
+                let before = format!("{:?}", tab.iter_panes_ignoring_zoom());
+                if fail_existing {
+                    *existing.resize_failures.lock() = 1;
+                } else {
+                    *incoming.resize_failures.lock() = 1;
+                }
+                let err = tab
+                    .split_and_insert(
+                        1,
+                        SplitRequest {
+                            target_is_second,
+                            ..Default::default()
+                        },
+                        floating.clone(),
+                    )
+                    .unwrap_err();
+                assert_eq!(err.root_cause().to_string(), "injected resize failure");
+                assert!(
+                    tab.inner.lock().pane.is_some(),
+                    "split failure discarded tiled tree"
+                );
+                assert_eq!(before, format!("{:?}", tab.iter_panes_ignoring_zoom()));
+                let (_, retained) = tab.get_floating_pane_by_pane_id(402).unwrap();
+                assert!(Arc::ptr_eq(&retained, &floating));
+                // Layout queries and a later resize must still work.
+                let size = tab.get_size();
+                tab.resize(size);
+            }
+        }
     }
 
     #[test]
