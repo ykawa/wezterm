@@ -3,8 +3,6 @@ use crate::pane::ClientPane;
 use anyhow::{anyhow, bail, Context};
 use async_ossl::AsyncSslStream;
 use async_trait::async_trait;
-use codec::ActiveFloatingPaneChanged;
-use codec::FloatingPaneVisibilityChanged;
 use codec::*;
 use config::{configuration, SshDomain, TlsDomainClient, UnixDomain, UnixTarget};
 use filedescriptor::FileDescriptor;
