@@ -1,0 +1,65 @@
+# Maintainer: ykawa
+pkgname=wezterm-floating
+pkgver=20261102.1fa582798
+pkgrel=1
+pkgdesc='WezTerm with floating panes (ykawa fork)'
+arch=('x86_64')
+url='https://github.com/ykawa/wezterm'
+license=('MIT')
+depends=(
+  'glibc' 'gcc-libs' 'bash' 'fontconfig' 'freetype2' 'libpng' 'zlib'
+  'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11'
+  'xcb-util' 'xcb-util-image' 'xcb-util-keysyms' 'xcb-util-wm'
+  'wayland' 'openssl' 'libssh2' 'libgit2' 'ncurses' 'hicolor-icon-theme' 'ttf-font'
+)
+makedepends=('git' 'rust' 'cmake' 'python' 'pkgconf')
+provides=('wezterm')
+conflicts=('wezterm' 'wezterm-git' 'wezterm-bin' 'wezterm-nightly-bin')
+options=('!lto')
+_commit=1fa582798f7e7508f5f92a7f00e40eeff5a2c96c
+source=("wezterm::git+https://github.com/ykawa/wezterm.git#commit=${_commit}")
+sha256sums=('SKIP')
+
+prepare() {
+  cd wezterm
+  git submodule update --init --recursive --depth=1
+}
+
+build() {
+  cd wezterm
+  export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+  cargo build --release --locked \
+    -p wezterm -p wezterm-gui -p wezterm-mux-server
+}
+
+check() {
+  cd wezterm
+  cargo test --release --locked -p mux tab::test -- --test-threads=1
+  cargo test --release --locked -p wezterm-client floating_pane_registration_tests
+  cargo test --release --locked -p wezterm floating_spawn_rejects_window_destinations
+}
+
+package() {
+  cd wezterm
+  for binary in wezterm wezterm-gui wezterm-mux-server; do
+    install -Dm755 "target/release/$binary" "$pkgdir/usr/bin/$binary"
+  done
+  install -Dm755 assets/open-wezterm-here "$pkgdir/usr/bin/open-wezterm-here"
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
+  install -Dm644 assets/wezterm.desktop \
+    "$pkgdir/usr/share/applications/org.wezfurlong.wezterm.desktop"
+  install -Dm644 assets/wezterm.appdata.xml \
+    "$pkgdir/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml"
+  install -Dm644 assets/icon/terminal.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png"
+  install -Dm644 assets/icon/wezterm-icon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.wezfurlong.wezterm.svg"
+  install -Dm644 assets/shell-completion/bash \
+    "$pkgdir/usr/share/bash-completion/completions/wezterm"
+  install -Dm644 assets/shell-completion/zsh \
+    "$pkgdir/usr/share/zsh/site-functions/_wezterm"
+  install -Dm644 assets/shell-completion/fish \
+    "$pkgdir/usr/share/fish/vendor_completions.d/wezterm.fish"
+  install -Dm644 assets/shell-integration/wezterm.sh \
+    "$pkgdir/etc/profile.d/wezterm.sh"
+}

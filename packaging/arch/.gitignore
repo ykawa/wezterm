@@ -1,0 +1,6 @@
+/out/
+/src/
+/pkg/
+/wezterm/
+/*.pkg.tar.*
+/.SRCINFO
