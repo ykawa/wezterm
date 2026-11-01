@@ -19,7 +19,7 @@ Accept replacement of an existing WezTerm package. This package provides
 `wezterm` and conflicts with the stock, git, bin, and nightly-bin packages.
 It includes the CLI, GUI, mux server, desktop entry, icons, completions,
 and shell integration. Terminfo is supplied by Arch's `ncurses` package to
-avoid owning the same file twice. Helix and lazygit are not dependencies.
+avoid owning the same file twice.
 
 Close and reopen WezTerm to switch to the new GUI. A running stock GUI or mux
 server keeps its old code until restarted; save work and end its sessions
