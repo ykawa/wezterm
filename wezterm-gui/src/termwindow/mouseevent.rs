@@ -690,7 +690,7 @@ impl super::TermWindow {
                 && position.row as usize >= floating_pane.top
                 && position.row as usize <= floating_pane.top + floating_pane.height;
 
-            if !mouse_in_floating_pane {
+            if !mouse_in_floating_pane && !is_already_captured {
                 let mux = Mux::get();
                 if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
                     //Hide floating pane if mouse is clicked outside the floating pane

@@ -254,22 +254,25 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
+        let floating_pane = self.get_floating_pane_to_render();
         let mut floating_pane_layers = float_layer.quad_allocator();
         for pos in panes {
-            if !self.is_floating_pane_active() {
-                if pos.is_active {
-                    self.update_text_cursor(&pos);
-                    if focused {
-                        pos.pane.advise_focus();
-                        mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
-                    }
+            if floating_pane.is_none() && pos.is_active {
+                self.update_text_cursor(&pos);
+                if focused {
+                    pos.pane.advise_focus();
+                    mux::Mux::get().record_focus_for_current_identity(pos.pane.pane_id());
                 }
             }
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
         }
 
-        if let Some(floating_pane) = self.get_floating_pane_to_render() {
-            mux::Mux::get().record_focus_for_current_identity(floating_pane.pane.pane_id());
+        if let Some(floating_pane) = floating_pane {
+            self.update_text_cursor(&floating_pane);
+            if focused {
+                floating_pane.pane.advise_focus();
+                mux::Mux::get().record_focus_for_current_identity(floating_pane.pane.pane_id());
+            }
             self.paint_pane(&floating_pane, &mut floating_pane_layers)
                 .context("paint_pane")?;
             self.paint_floating_pane_border(floating_pane, &mut floating_pane_layers)

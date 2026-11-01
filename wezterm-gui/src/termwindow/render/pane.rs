@@ -93,13 +93,15 @@ impl crate::TermWindow {
         let white_space = gl_state.util_sprites.white_space.texture_coords();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
 
-        let window_is_transparent =
-            !self.window_background.is_empty() || config.window_background_opacity != 1.0;
+        let window_is_transparent = !pos.is_floating
+            && (!self.window_background.is_empty() || config.window_background_opacity != 1.0);
 
         let default_bg = palette
             .resolve_bg(ColorAttribute::Default)
             .to_linear()
-            .mul_alpha(if window_is_transparent {
+            .mul_alpha(if pos.is_floating {
+                1.0
+            } else if window_is_transparent {
                 0.
             } else {
                 config.text_background_opacity
@@ -107,13 +109,13 @@ impl crate::TermWindow {
 
         let background_rect = self.compute_background_rect_with_scrollbar(
             &pos,
-            padding_top,
             padding_left,
+            padding_top,
             &border,
             top_pixel_y,
         );
 
-        if self.window_background.is_empty() {
+        if self.window_background.is_empty() || pos.is_floating {
             // Per-pane, palette-specified background
 
             let mut quad = self
@@ -124,7 +126,11 @@ impl crate::TermWindow {
                     palette
                         .background
                         .to_linear()
-                        .mul_alpha(config.window_background_opacity),
+                        .mul_alpha(if pos.is_floating {
+                            1.0
+                        } else {
+                            config.window_background_opacity
+                        }),
                 )
                 .context("filled_rectangle")?;
             quad.set_hsv(if pos.is_active {
@@ -204,9 +210,10 @@ impl crate::TermWindow {
                 )
             } else {
                 let win_y_offset = top_bar_height as usize;
-                let win_bottom = self.dimensions.pixel_height.saturating_sub(
-                    win_y_offset + border.bottom.get() + bottom_bar_height as usize,
-                );
+                let win_bottom = self
+                    .dimensions
+                    .pixel_height
+                    .saturating_sub(border.bottom.get() + bottom_bar_height as usize);
                 let x = self.dimensions.pixel_width - padding as usize - border.right.get();
                 (win_y_offset + border.top.get(), win_bottom, x)
             };
@@ -216,7 +223,7 @@ impl crate::TermWindow {
             let info = ScrollHit::thumb(
                 &*pos.pane,
                 current_viewport,
-                temp_bottom - thumb_y_offset,
+                temp_bottom.saturating_sub(thumb_y_offset),
                 min_height as usize,
             );
 
@@ -235,7 +242,7 @@ impl crate::TermWindow {
                 x: thumb_x,
                 width: padding as usize,
                 y: thumb_y_offset,
-                height: scroll_height,
+                height: info.top,
                 item_type: UIItemType::AboveScrollThumb,
             });
             self.ui_items.push(UIItem {
@@ -249,7 +256,7 @@ impl crate::TermWindow {
                 x: thumb_x,
                 width: padding as usize,
                 y: abs_thumb_top + thumb_size,
-                height: scroll_height.saturating_sub(abs_thumb_top + thumb_size),
+                height: temp_bottom.saturating_sub(abs_thumb_top + thumb_size),
                 item_type: UIItemType::BelowScrollThumb,
             });
 

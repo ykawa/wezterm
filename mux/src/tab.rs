@@ -1957,8 +1957,12 @@ impl TabInner {
             }
         }
 
-        if active_floating_pane_dead {
-            self.set_floating_pane_visibility(false, false);
+        if active_floating_pane_dead && self.floating_pane_visible {
+            self.floating_pane_visible = false;
+            Mux::get().notify(MuxNotification::FloatingPaneVisibilityChanged {
+                tab_id: self.id,
+                visible: false,
+            });
         }
 
         let active_floating_index = self.active_floating_pane;
@@ -2410,9 +2414,8 @@ impl TabInner {
             anyhow::bail!("cannot add floating pane while zoomed");
         }
 
-        self.append_floating_pane(Arc::clone(&pane));
-
         pane.resize(size)?;
+        self.append_floating_pane(Arc::clone(&pane));
         Ok(())
     }
 
