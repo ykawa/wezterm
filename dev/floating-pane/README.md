@@ -22,6 +22,13 @@ In Helix, press **Space**, **,**, **g** to open lazygit as a floating pane.
 Press **q** in lazygit to close it. **Ctrl+Shift+P** hides or shows the floating
 pane; **Ctrl+Shift+G** opens another lazygit pane from any terminal pane.
 
+**Ctrl+Alt+Shift+arrow** resizes the active floating pane by five cells:
+Left/Up shrink its width/height, and Right/Down expand them. Each floating
+pane keeps its own size while hidden and across mux reconnects. Window resize
+clamps the display to available cells and restores the requested size when
+space becomes available. The same action retains normal split-pane behavior
+when a tiled pane is active. Mouse drag resizing is not implemented.
+
 From a shell inside this development GUI:
 
 ```sh
@@ -30,7 +37,7 @@ wezterm cli list --format json
 ```
 
 The JSON list includes `is_floating`. The floating pane CLI must connect to this
-fork's GUI, rather than the stock GUI: its mux codec version is 47, reflecting
+fork's GUI, rather than the stock GUI: its mux codec version is 48, reflecting
 the added messages and changed pane-tree format.
 
 ## Port changes

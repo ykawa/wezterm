@@ -248,6 +248,14 @@ pub trait Pane: Downcast + Send + Sync {
     fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>>;
     fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write>;
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()>;
+    /// Return true when a remote domain handles this floating-pane adjustment.
+    fn adjust_floating_pane_size(
+        &self,
+        _direction: config::keyassignment::PaneDirection,
+        _amount: usize,
+    ) -> bool {
+        false
+    }
     /// Called as a hint that the pane is being resized as part of
     /// a zoom-to-fill-all-the-tab-space operation.
     fn set_zoomed(&self, _zoomed: bool) {}
