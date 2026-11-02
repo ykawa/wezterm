@@ -1,6 +1,6 @@
 # Maintainer: ykawa
 pkgname=wezterm-floating
-pkgver=20261102.5.g7623db759
+pkgver=20261103.3.gc73d56064
 pkgrel=1
 pkgdesc='WezTerm with floating panes (ykawa fork)'
 arch=('x86_64')
@@ -16,7 +16,7 @@ makedepends=('git' 'rust' 'cmake' 'python' 'pkgconf')
 provides=('wezterm')
 conflicts=('wezterm' 'wezterm-git' 'wezterm-bin' 'wezterm-nightly-bin')
 options=('!lto')
-_commit=7623db759617ffc5862c4fec7b0722d4430de7b4
+_commit=c73d560646aa45f70a3b17448ef512e201faf69c
 source=("wezterm::git+https://github.com/ykawa/wezterm.git#commit=${_commit}")
 sha256sums=('SKIP')
 
