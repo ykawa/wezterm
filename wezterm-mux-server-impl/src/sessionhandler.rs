@@ -1037,6 +1037,29 @@ impl SessionHandler {
                 .detach();
             }
 
+            Pdu::MoveFloatingPane(request) => {
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            let mux = Mux::get();
+                            let (_, _, tab_id) = mux
+                                .resolve_pane_id(request.pane_id)
+                                .ok_or_else(|| anyhow!("pane_id {} invalid", request.pane_id))?;
+                            let tab = mux
+                                .get_tab(tab_id)
+                                .ok_or_else(|| anyhow!("tab_id {} invalid", tab_id))?;
+                            tab.move_floating_pane(
+                                request.pane_id,
+                                request.direction,
+                                request.amount,
+                            )?;
+                            Ok(Pdu::UnitResponse(UnitResponse {}))
+                        },
+                        send_response,
+                    )
+                })
+                .detach();
+            }
             Pdu::AdjustPaneSize(AdjustPaneSize {
                 pane_id,
                 direction,

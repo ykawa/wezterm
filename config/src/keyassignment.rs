@@ -599,6 +599,7 @@ pub enum KeyAssignment {
     StartWindowDrag,
 
     AdjustPaneSize(PaneDirection, usize),
+    MoveFloatingPane(PaneDirection, usize),
     ActivatePaneDirection(PaneDirection),
     ActivatePaneByIndex(usize),
     TogglePaneZoomState,

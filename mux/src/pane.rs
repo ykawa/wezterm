@@ -256,6 +256,14 @@ pub trait Pane: Downcast + Send + Sync {
     ) -> bool {
         false
     }
+    /// Return true when a remote domain handles the position adjustment.
+    fn move_floating_pane(
+        &self,
+        _direction: config::keyassignment::PaneDirection,
+        _amount: usize,
+    ) -> bool {
+        false
+    }
     /// Called as a hint that the pane is being resized as part of
     /// a zoom-to-fill-all-the-tab-space operation.
     fn set_zoomed(&self, _zoomed: bool) {}
