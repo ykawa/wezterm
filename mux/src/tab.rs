@@ -1164,7 +1164,9 @@ impl TabInner {
         if self.floating_pane_visible && self.active_floating_pane < self.floating_panes.len() {
             let floating_pane = &self.floating_panes[self.active_floating_pane];
             let root_size = self.size;
-            let size = self.floating_pane_size(floating_pane.pane_id(), self.size);
+            let dimensions = floating_pane.get_dimensions();
+            let size =
+                Self::floating_size_in_cells(root_size, dimensions.cols, dimensions.viewport_rows);
 
             let (left, top) = self.floating_pane_position(floating_pane.pane_id(), root_size, size);
 
@@ -3302,6 +3304,9 @@ mod test {
             pixel_height: 250,
             ..tab.get_size()
         };
+        let rendered = tab.get_active_floating_pane().unwrap();
+        assert_eq!((rendered.width, rendered.height), (40, 10));
+        assert_eq!((rendered.left, rendered.top), (20, 7));
         tab.move_floating_pane(target.id, PaneDirection::Right, 5)
             .unwrap();
         assert_eq!(
