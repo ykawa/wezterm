@@ -2,7 +2,7 @@
 
 `wezterm-floating` packages the floating-pane fork as a replacement for stock
 WezTerm. The PKGBUILD pins the application source to commit
-`3b75d065d511da7bb6da55b6720054f957522eba`.
+`7623db759617ffc5862c4fec7b0722d4430de7b4`.
 
 ## Install on another PC
 
@@ -12,7 +12,7 @@ GitHub Release into the same directory, then run:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-sudo pacman -U ./wezterm-floating-20261102.4.g3b75d065d-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wezterm-floating-20261102.5.g7623db759-1-x86_64.pkg.tar.zst
 ```
 
 Accept replacement of an existing WezTerm package. This package provides
