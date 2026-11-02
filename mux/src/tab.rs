@@ -2449,6 +2449,8 @@ impl TabInner {
             PaneDirection::Up => rows = rows.saturating_sub(amount),
             _ => anyhow::bail!("floating resize requires an arrow direction"),
         }
+        cols = cols.max(1);
+        rows = rows.max(1);
         let size = Self::floating_size_in_cells(self.size, cols, rows);
         if let Err(err) = pane.resize(size) {
             if let Err(restore_err) = pane.resize(previous) {
@@ -3126,6 +3128,10 @@ mod test {
         tab.adjust_pane_size(PaneDirection::Up, usize::MAX);
         let pos = tab.get_active_floating_pane().unwrap();
         assert_eq!((pos.width, pos.height), (1, 1));
+        tab.adjust_pane_size(PaneDirection::Right, 1);
+        tab.adjust_pane_size(PaneDirection::Down, 1);
+        let pos = tab.get_active_floating_pane().unwrap();
+        assert_eq!((pos.width, pos.height), (2, 2));
     }
 
     #[test]
