@@ -24,6 +24,13 @@ use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
 impl super::TermWindow {
+    fn clear_terminal_hover(&mut self, context: &dyn WindowOps) {
+        if self.current_highlight.take().is_some() {
+            context.invalidate();
+        }
+        context.set_cursor(Some(CursorIcon::Default));
+    }
+
     fn floating_pane_mouse_bounds(&self, pos: &mux::tab::PositionedPane) -> (f64, f64, f64, f64) {
         let (left, top) = self.padding_left_top();
         let border = self.get_os_border();
@@ -766,6 +773,7 @@ impl super::TermWindow {
                             mux.set_floating_pane_visibility(tab.tab_id(), false).ok();
                         }
                     }
+                    self.clear_terminal_hover(context);
                     return;
                 }
             }
@@ -773,6 +781,7 @@ impl super::TermWindow {
 
         if let Some(captured) = captured_pane_id {
             if !panes.iter().any(|pos| pos.pane.pane_id() == captured) {
+                self.clear_terminal_hover(context);
                 return;
             }
         }
@@ -797,6 +806,7 @@ impl super::TermWindow {
                     }
                     context.invalidate();
                 }
+                self.clear_terminal_hover(context);
                 return;
             }
             if Some(pos.pane.pane_id()) == captured_pane_id {

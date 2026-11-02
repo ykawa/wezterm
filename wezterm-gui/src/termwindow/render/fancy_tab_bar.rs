@@ -466,7 +466,7 @@ impl crate::TermWindow {
                     top: Dimension::Cells(0.),
                     bottom: Dimension::Cells(0.),
                 })
-                .zindex(3),
+                .zindex(1),
         );
         children.push(
             Element::new(&font, ElementContent::Children(right_eles))
@@ -557,7 +557,7 @@ fn make_x_button(
     )
     // Ensure that we draw our background over the
     // top of the rest of the tab contents
-    .zindex(3)
+    .zindex(1)
     .vertical_align(VerticalAlign::Middle)
     .float(Float::Right)
     .item_type(UIItemType::CloseTab(tab_idx))
