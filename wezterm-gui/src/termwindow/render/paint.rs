@@ -251,6 +251,10 @@ impl crate::TermWindow {
         }
 
         let floating_panes = self.get_floating_panes_to_render();
+        self.render_state
+            .as_ref()
+            .unwrap()
+            .retain_floating_sublayers(floating_panes.len());
         let floating_layers = (0..floating_panes.len())
             .map(|order| {
                 self.render_state

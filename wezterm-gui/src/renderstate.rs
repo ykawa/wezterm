@@ -625,6 +625,13 @@ impl RenderState {
         self.layer_for_zindex_and_sublayer(zindex, 0)
     }
 
+    /// Drop GPU buffers that belonged to floating panes no longer displayed.
+    pub fn retain_floating_sublayers(&self, visible_count: usize) {
+        self.layers
+            .borrow_mut()
+            .retain(|layer| layer.zindex != 2 || layer.sublayer < visible_count);
+    }
+
     /// Keep each floating pane's background and text together when panes overlap.
     pub fn layer_for_zindex_and_sublayer(
         &self,

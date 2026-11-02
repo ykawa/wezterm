@@ -65,6 +65,9 @@ impl super::TermWindow {
             None => return,
         };
 
+        // Preserve the original capture for release routing even though the
+        // stored capture is cleared before dispatching that event.
+        let mouse_capture = self.current_mouse_capture.clone();
         self.current_mouse_event.replace(event.clone());
 
         let border = self.get_os_border();
@@ -91,6 +94,12 @@ impl super::TermWindow {
             .sub((padding_left + border.left.get() as f32) as isize)
             .max(0) as f32)
             / self.render_metrics.cell_size.width as f32;
+        let pointer = (
+            (event.coords.x as f64 - (padding_left + border.left.get() as f32) as f64)
+                / self.render_metrics.cell_size.width as f64,
+            (event.coords.y as f64 - padding_top as f64 - first_line_offset as f64)
+                / self.render_metrics.cell_size.height as f64,
+        );
         let x = if !pane.is_mouse_grabbed() {
             // Round the x coordinate so that we're a bit more forgiving of
             // the horizontal position when selecting cells
@@ -189,7 +198,7 @@ impl super::TermWindow {
 
         let prior_ui_item = self.last_ui_item.clone();
 
-        let ui_item = if matches!(self.current_mouse_capture, None | Some(MouseCapture::UI)) {
+        let ui_item = if matches!(mouse_capture, None | Some(MouseCapture::UI)) {
             let ui_item = self.resolve_ui_item(&event);
 
             match (self.last_ui_item.take(), &ui_item) {
@@ -221,10 +230,7 @@ impl super::TermWindow {
                 self.current_mouse_capture = Some(MouseCapture::UI);
             }
             self.mouse_event_ui_item(item, pane, y, event, context);
-        } else if matches!(
-            self.current_mouse_capture,
-            None | Some(MouseCapture::TerminalPane(_))
-        ) {
+        } else if matches!(mouse_capture, None | Some(MouseCapture::TerminalPane(_))) {
             self.mouse_event_terminal(
                 pane,
                 ClickPosition {
@@ -236,6 +242,11 @@ impl super::TermWindow {
                 event,
                 context,
                 capture_mouse,
+                match mouse_capture {
+                    Some(MouseCapture::TerminalPane(id)) => Some(id),
+                    _ => None,
+                },
+                pointer,
             );
         }
 
@@ -669,6 +680,8 @@ impl super::TermWindow {
         event: MouseEvent,
         context: &dyn WindowOps,
         capture_mouse: bool,
+        captured_pane_id: Option<mux::pane::PaneId>,
+        pointer: (f64, f64),
     ) {
         let mut is_click_to_focus_pane = false;
 
@@ -679,10 +692,7 @@ impl super::TermWindow {
             mut y_pixel_offset,
         } = position;
 
-        let is_already_captured = matches!(
-            self.current_mouse_capture,
-            Some(MouseCapture::TerminalPane(_))
-        );
+        let is_already_captured = captured_pane_id.is_some();
 
         let floating_panes = self.get_floating_panes_to_render();
         let panes = if floating_panes.is_empty() {
@@ -690,16 +700,19 @@ impl super::TermWindow {
         } else {
             // Hit-test front to back, matching the paint order. A captured drag
             // must keep targeting its original pane even outside its bounds.
-            let hovered = floating_panes.into_iter().rev().find(|pos| {
-                if is_already_captured {
-                    pos.pane.pane_id() == pane.pane_id()
-                } else {
-                    position.column >= pos.left
-                        && position.column < pos.left + pos.width
-                        && position.row >= pos.top as i64
-                        && position.row < (pos.top + pos.height) as i64
-                }
-            });
+            let target = floating_mouse_target(
+                floating_panes.iter().map(|pos| {
+                    (
+                        pos.pane.pane_id(),
+                        (pos.left, pos.top, pos.width, pos.height),
+                    )
+                }),
+                captured_pane_id,
+                pointer,
+            );
+            let hovered = floating_panes
+                .into_iter()
+                .find(|pos| Some(pos.pane.pane_id()) == target);
             match hovered {
                 Some(pos) => vec![pos],
                 None => {
@@ -715,11 +728,15 @@ impl super::TermWindow {
         };
 
         for pos in panes {
+            if Some(pos.pane.pane_id()) == captured_pane_id {
+                pane = Arc::clone(&pos.pane);
+            }
             if !is_already_captured
-                && row >= pos.top as i64
-                && row <= (pos.top + pos.height) as i64
-                && column >= pos.left
-                && column <= pos.left + pos.width
+                && (pos.is_floating
+                    || (row >= pos.top as i64
+                        && row <= (pos.top + pos.height) as i64
+                        && column >= pos.left
+                        && column <= pos.left + pos.width))
             {
                 if pane.pane_id() != pos.pane.pane_id() {
                     // We're over a pane that isn't active
@@ -735,7 +752,6 @@ impl super::TermWindow {
                                     }
                                 });
 
-                            pane = Arc::clone(&pos.pane);
                             is_click_to_focus_pane = true;
                         }
                         WMEK::Move => {
@@ -750,7 +766,6 @@ impl super::TermWindow {
                                         }
                                     });
 
-                                pane = Arc::clone(&pos.pane);
                                 context.invalidate();
                             }
                         }
@@ -758,15 +773,27 @@ impl super::TermWindow {
                         WMEK::VertWheel(_) => {
                             // Let wheel events route to the hovered pane,
                             // even if it doesn't have focus
-                            pane = Arc::clone(&pos.pane);
                             context.invalidate();
                         }
                     }
                 }
+                pane = Arc::clone(&pos.pane);
+                // Rounding is for selection only; hit testing used raw pointer
+                // coordinates and the target pane decides mouse-reporting mode.
+                column = if pane.is_mouse_grabbed() {
+                    pointer.0.max(0.0).trunc() as usize
+                } else {
+                    pointer.0.max(0.0).round() as usize
+                };
                 column = column.saturating_sub(pos.left);
                 row = row.saturating_sub(pos.top as i64);
                 break;
             } else if is_already_captured && pane.pane_id() == pos.pane.pane_id() {
+                column = if pane.is_mouse_grabbed() {
+                    pointer.0.max(0.0).trunc() as usize
+                } else {
+                    pointer.0.max(0.0).round() as usize
+                };
                 column = column.saturating_sub(pos.left);
                 row = row.saturating_sub(pos.top as i64).max(0);
 
@@ -1108,5 +1135,80 @@ fn mouse_press_to_tmb(press: &MousePress) -> TMB {
         MousePress::Left => TMB::Left,
         MousePress::Right => TMB::Right,
         MousePress::Middle => TMB::Middle,
+    }
+}
+
+/// Captured drags (including release) stay with their pane; otherwise choose
+/// the frontmost pane under the pointer, independent of keyboard focus.
+fn floating_mouse_target(
+    panes: impl DoubleEndedIterator<Item = (mux::pane::PaneId, (usize, usize, usize, usize))>,
+    captured: Option<mux::pane::PaneId>,
+    pointer: (f64, f64),
+) -> Option<mux::pane::PaneId> {
+    panes.rev().find_map(|(id, (left, top, width, height))| {
+        let hit = match captured {
+            Some(captured) => id == captured,
+            None => pointer_in_pane(pointer, left, top, width, height),
+        };
+        hit.then_some(id)
+    })
+}
+
+/// Hit testing must not use the rounded coordinates used for text selection.
+fn pointer_in_pane(
+    pointer: (f64, f64),
+    left: usize,
+    top: usize,
+    width: usize,
+    height: usize,
+) -> bool {
+    pointer.0 >= left as f64
+        && pointer.0 < (left + width) as f64
+        && pointer.1 >= top as f64
+        && pointer.1 < (top + height) as f64
+}
+
+#[cfg(test)]
+mod floating_mouse_tests {
+    use super::{floating_mouse_target, pointer_in_pane};
+
+    #[test]
+    fn captured_release_stays_with_original_pane_outside_its_bounds() {
+        let panes = [(1, (0, 0, 20, 10)), (2, (10, 5, 20, 10))];
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), Some(1), (29.9, 14.0)),
+            Some(1)
+        );
+        // A disappeared captured pane must not redirect a release to a neighbour.
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), Some(3), (29.9, 14.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn uncaptured_hover_and_wheel_target_frontmost_pane_without_focus() {
+        let panes = [(1, (0, 0, 20, 10)), (2, (10, 5, 20, 10))];
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), None, (15.0, 7.0)),
+            Some(2)
+        );
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), None, (5.0, 7.0)),
+            Some(1)
+        );
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), None, (29.9, 14.0)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn rightmost_half_cell_is_inside_but_border_is_outside() {
+        assert!(pointer_in_pane((29.9, 10.5), 10, 5, 20, 10));
+        assert!(!pointer_in_pane((30.0, 10.5), 10, 5, 20, 10));
+        assert!(!pointer_in_pane((9.9, 10.5), 10, 5, 20, 10));
+        assert!(!pointer_in_pane((10.0, 15.0), 10, 5, 20, 10));
+        assert!(!pointer_in_pane((-0.1, 0.0), 0, 0, 20, 10));
     }
 }
