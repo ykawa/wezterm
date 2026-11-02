@@ -29,6 +29,13 @@ clamps the display to available cells and restores the requested size when
 space becomes available. The same action retains normal split-pane behavior
 when a tiled pane is active. Mouse drag resizing is not implemented.
 
+**Ctrl+Alt+H/J/K/L** moves the floating pane left/down/up/right by five cells,
+without resizing its terminal. Movement stops at the tab's edges. Each pane
+retains its own position across hiding and mux reconnects. A new pane starts
+centered; once moved, its requested left/top coordinates are retained and
+temporarily clamped when window or pane resizing leaves less room. A move
+starts from the displayed position and only updates the selected axis.
+
 From a shell inside this development GUI:
 
 ```sh
@@ -37,7 +44,7 @@ wezterm cli list --format json
 ```
 
 The JSON list includes `is_floating`. The floating pane CLI must connect to this
-fork's GUI, rather than the stock GUI: its mux codec version is 48, reflecting
+fork's GUI, rather than the stock GUI: its mux codec version is 49, reflecting
 the added messages and changed pane-tree format.
 
 ## Port changes

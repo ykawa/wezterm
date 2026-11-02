@@ -413,6 +413,30 @@ impl Pane for ClientPane {
         true
     }
 
+    fn move_floating_pane(
+        &self,
+        direction: config::keyassignment::PaneDirection,
+        amount: usize,
+    ) -> bool {
+        let client = Arc::clone(&self.client);
+        let pane_id = self.remote_pane_id;
+        promise::spawn::spawn(async move {
+            if let Err(err) = client
+                .client
+                .move_floating_pane(MoveFloatingPane {
+                    pane_id,
+                    direction,
+                    amount,
+                })
+                .await
+            {
+                log::error!("Failed to move floating pane {}: {:#}", pane_id, err);
+            }
+        })
+        .detach();
+        true
+    }
+
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
         let render = self.renderable.lock();
         let mut inner = render.inner.borrow_mut();

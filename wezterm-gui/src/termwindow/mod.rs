@@ -1310,6 +1310,7 @@ impl TermWindow {
                 MuxNotification::ActiveFloatingPaneChanged { .. } => {}
                 MuxNotification::TabResized(_) => {
                     // Also handled by wezterm-client
+                    window.invalidate();
                     self.update_title_post_status();
                 }
                 MuxNotification::TabTitleChanged { .. } => {
@@ -2979,6 +2980,20 @@ impl TermWindow {
 
                 if self.tab_state(tab_id).overlay.is_none() {
                     tab.adjust_pane_size(*direction, *amount);
+                }
+            }
+            MoveFloatingPane(direction, amount) => {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    if self.tab_state(tab.tab_id()).overlay.is_none() {
+                        if let Some(pos) = tab.get_active_floating_pane() {
+                            if let Err(err) =
+                                tab.move_floating_pane(pos.pane.pane_id(), *direction, *amount)
+                            {
+                                log::error!("Failed to move floating pane: {:#}", err);
+                            }
+                        }
+                    }
                 }
             }
             ActivatePaneByIndex(index) => {

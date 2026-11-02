@@ -2,7 +2,7 @@
 
 `wezterm-floating` packages the floating-pane fork as a replacement for stock
 WezTerm. The PKGBUILD pins the application source to commit
-`2da5ac5fe0ace33bf69b290b10cf7cc4ff490316`.
+`7623db759617ffc5862c4fec7b0722d4430de7b4`.
 
 ## Install on another PC
 
@@ -12,7 +12,7 @@ GitHub Release into the same directory, then run:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-sudo pacman -U ./wezterm-floating-20261102.3.g2da5ac5fe-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wezterm-floating-20261102.5.g7623db759-1-x86_64.pkg.tar.zst
 ```
 
 Accept replacement of an existing WezTerm package. This package provides
@@ -38,6 +38,10 @@ retained; floating-pane settings are opt-in. For example:
 
 ```lua
 config.keys = {
+  { key = 'h', mods = 'CTRL|ALT', action = wezterm.action.MoveFloatingPane { 'Left', 5 } },
+  { key = 'j', mods = 'CTRL|ALT', action = wezterm.action.MoveFloatingPane { 'Down', 5 } },
+  { key = 'k', mods = 'CTRL|ALT', action = wezterm.action.MoveFloatingPane { 'Up', 5 } },
+  { key = 'l', mods = 'CTRL|ALT', action = wezterm.action.MoveFloatingPane { 'Right', 5 } },
   { key = 'LeftArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Left', 5 } },
   { key = 'RightArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Right', 5 } },
   { key = 'UpArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Up', 5 } },
@@ -53,10 +57,15 @@ Merge these entries into an existing key table rather than replacing other keys.
 While a floating pane is visible, Left/Up shrink and Right/Down expand it.
 Each pane retains its size across hiding and mux reconnects. Window size bounds
 are enforced without discarding the requested size. When a tiled pane is active,
-these shortcuts continue to resize normal splits. Mouse drag resizing is not implemented.
+these shortcuts continue to resize normal splits. Ctrl+Alt+H/J/K/L moves the visible floating pane left/down/up/right by five
+cells. Movement stops at the terminal area edges and preserves the terminal
+size. Each pane retains its position through hiding and mux reconnects.
+Window or pane resizing clamps its display position temporarily; a later move
+starts from the displayed position and only updates that axis.
+Mouse drag resizing or movement is not implemented.
 
-This release uses mux codec 48. Fully restart old GUI and mux-server processes
-after saving session work; codec 47 processes cannot connect to this version.
+This release uses mux codec 49. Fully restart old GUI and mux-server processes
+after saving session work; codec 48 (and older) processes cannot connect to this version.
 You can also open a floating shell from inside the fork's GUI:
 
 ```sh

@@ -442,7 +442,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 48;
+pub const CODEC_VERSION: usize = 49;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -508,6 +508,7 @@ pdu! {
     MoveFloatingPaneToSplit: 65,
     MovePaneToFloatingPane: 66,
     ActiveFloatingPaneChanged: 67,
+    MoveFloatingPane: 68,
 }
 
 impl Pdu {
@@ -521,6 +522,7 @@ impl Pdu {
             | Self::SendMouseEvent(_)
             | Self::SendPaste(_)
             | Self::Resize(_)
+            | Self::MoveFloatingPane(_)
             | Self::SetClipboard(_)
             | Self::SetPaneZoomed(_)
             | Self::SpawnV2(_) => true,
@@ -696,6 +698,13 @@ pub struct MovePaneToFloatingPane {
 pub struct MoveFloatingPaneToSplit {
     pub pane_id: PaneId,
     pub split_direction: SplitDirection,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct MoveFloatingPane {
+    pub pane_id: PaneId,
+    pub direction: PaneDirection,
+    pub amount: usize,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]

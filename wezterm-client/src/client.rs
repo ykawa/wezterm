@@ -1390,6 +1390,7 @@ impl Client {
     rpc!(spawn_v2, SpawnV2, SpawnResponse);
     rpc!(split_pane, SplitPane, SpawnResponse);
     rpc!(add_floating_pane, SpawnFloatingPane, SpawnResponse);
+    rpc!(move_floating_pane, MoveFloatingPane, UnitResponse);
     rpc!(
         set_floating_pane_visibility,
         FloatingPaneVisibilityChanged,
