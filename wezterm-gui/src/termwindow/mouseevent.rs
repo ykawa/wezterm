@@ -24,13 +24,59 @@ use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
 impl super::TermWindow {
+    fn floating_pane_mouse_bounds(&self, pos: &mux::tab::PositionedPane) -> (f64, f64, f64, f64) {
+        let (left, top) = self.padding_left_top();
+        let border = self.get_os_border();
+        let top_bar = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
+            self.tab_bar_pixel_height().unwrap_or(0.)
+        } else {
+            0.
+        };
+        let rect = self.compute_background_rect_with_scrollbar(
+            pos,
+            left,
+            top,
+            &border,
+            top_bar + top + border.top.get() as f32,
+        );
+        (
+            rect.origin.x as f64,
+            rect.origin.y as f64,
+            rect.width() as f64,
+            rect.height() as f64,
+        )
+    }
+
     fn resolve_ui_item(&self, event: &MouseEvent) -> Option<UIItem> {
+        let floating = self.get_floating_panes_to_render();
+        let covering = floating.iter().rev().find(|pos| {
+            let (x, y, width, height) = self.floating_pane_mouse_bounds(pos);
+            pointer_in_pane(
+                (event.coords.x as f64, event.coords.y as f64),
+                x,
+                y,
+                width,
+                height,
+            )
+        });
         let x = event.coords.x;
         let y = event.coords.y;
         self.ui_items
             .iter()
             .rev()
-            .find(|item| item.hit_test(x, y))
+            .find(|item| {
+                item.hit_test(x, y)
+                    && match (&item.item_type, covering) {
+                        (UIItemType::Split(_), Some(_)) => false,
+                        (
+                            UIItemType::ScrollThumb
+                            | UIItemType::AboveScrollThumb
+                            | UIItemType::BelowScrollThumb,
+                            Some(pos),
+                        ) => pos.is_active,
+                        _ => true,
+                    }
+            })
             .cloned()
     }
 
@@ -701,14 +747,11 @@ impl super::TermWindow {
             // Hit-test front to back, matching the paint order. A captured drag
             // must keep targeting its original pane even outside its bounds.
             let target = floating_mouse_target(
-                floating_panes.iter().map(|pos| {
-                    (
-                        pos.pane.pane_id(),
-                        (pos.left, pos.top, pos.width, pos.height),
-                    )
-                }),
+                floating_panes
+                    .iter()
+                    .map(|pos| (pos.pane.pane_id(), self.floating_pane_mouse_bounds(pos))),
                 captured_pane_id,
-                pointer,
+                (event.coords.x as f64, event.coords.y as f64),
             );
             let hovered = floating_panes
                 .into_iter()
@@ -727,7 +770,34 @@ impl super::TermWindow {
             }
         };
 
+        if let Some(captured) = captured_pane_id {
+            if !panes.iter().any(|pos| pos.pane.pane_id() == captured) {
+                return;
+            }
+        }
+
         for pos in panes {
+            // A floating border/padding click can focus that pane, but must
+            // never reach either its terminal cells or a pane behind it.
+            if pos.is_floating
+                && !is_already_captured
+                && !pointer_in_pane(
+                    pointer,
+                    pos.left as f64,
+                    pos.top as f64,
+                    pos.width as f64,
+                    pos.height as f64,
+                )
+            {
+                if matches!(&event.kind, WMEK::Press(_)) {
+                    self.current_mouse_capture = Some(MouseCapture::UI);
+                    if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
+                        tab.set_active_floating_pane(pos.index);
+                    }
+                    context.invalidate();
+                }
+                return;
+            }
             if Some(pos.pane.pane_id()) == captured_pane_id {
                 pane = Arc::clone(&pos.pane);
             }
@@ -1141,7 +1211,7 @@ fn mouse_press_to_tmb(press: &MousePress) -> TMB {
 /// Captured drags (including release) stay with their pane; otherwise choose
 /// the frontmost pane under the pointer, independent of keyboard focus.
 fn floating_mouse_target(
-    panes: impl DoubleEndedIterator<Item = (mux::pane::PaneId, (usize, usize, usize, usize))>,
+    panes: impl DoubleEndedIterator<Item = (mux::pane::PaneId, (f64, f64, f64, f64))>,
     captured: Option<mux::pane::PaneId>,
     pointer: (f64, f64),
 ) -> Option<mux::pane::PaneId> {
@@ -1155,17 +1225,8 @@ fn floating_mouse_target(
 }
 
 /// Hit testing must not use the rounded coordinates used for text selection.
-fn pointer_in_pane(
-    pointer: (f64, f64),
-    left: usize,
-    top: usize,
-    width: usize,
-    height: usize,
-) -> bool {
-    pointer.0 >= left as f64
-        && pointer.0 < (left + width) as f64
-        && pointer.1 >= top as f64
-        && pointer.1 < (top + height) as f64
+fn pointer_in_pane(pointer: (f64, f64), left: f64, top: f64, width: f64, height: f64) -> bool {
+    pointer.0 >= left && pointer.0 < left + width && pointer.1 >= top && pointer.1 < top + height
 }
 
 #[cfg(test)]
@@ -1174,7 +1235,7 @@ mod floating_mouse_tests {
 
     #[test]
     fn captured_release_stays_with_original_pane_outside_its_bounds() {
-        let panes = [(1, (0, 0, 20, 10)), (2, (10, 5, 20, 10))];
+        let panes = [(1, (0.0, 0.0, 20.0, 10.0)), (2, (10.0, 5.0, 20.0, 10.0))];
         assert_eq!(
             floating_mouse_target(panes.iter().copied(), Some(1), (29.9, 14.0)),
             Some(1)
@@ -1188,7 +1249,7 @@ mod floating_mouse_tests {
 
     #[test]
     fn uncaptured_hover_and_wheel_target_frontmost_pane_without_focus() {
-        let panes = [(1, (0, 0, 20, 10)), (2, (10, 5, 20, 10))];
+        let panes = [(1, (0.0, 0.0, 20.0, 10.0)), (2, (10.0, 5.0, 20.0, 10.0))];
         assert_eq!(
             floating_mouse_target(panes.iter().copied(), None, (15.0, 7.0)),
             Some(2)
@@ -1204,11 +1265,25 @@ mod floating_mouse_tests {
     }
 
     #[test]
+    fn front_pane_margin_blocks_a_covered_pane() {
+        // Bounds include the half-cell margin used by the renderer.
+        let panes = [(1, (0.0, 0.0, 20.0, 10.0)), (2, (9.5, 4.5, 21.0, 11.0))];
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), None, (9.75, 7.0)),
+            Some(2)
+        );
+        assert_eq!(
+            floating_mouse_target(panes.iter().copied(), None, (30.25, 7.0)),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn rightmost_half_cell_is_inside_but_border_is_outside() {
-        assert!(pointer_in_pane((29.9, 10.5), 10, 5, 20, 10));
-        assert!(!pointer_in_pane((30.0, 10.5), 10, 5, 20, 10));
-        assert!(!pointer_in_pane((9.9, 10.5), 10, 5, 20, 10));
-        assert!(!pointer_in_pane((10.0, 15.0), 10, 5, 20, 10));
-        assert!(!pointer_in_pane((-0.1, 0.0), 0, 0, 20, 10));
+        assert!(pointer_in_pane((29.9, 10.5), 10.0, 5.0, 20.0, 10.0));
+        assert!(!pointer_in_pane((30.0, 10.5), 10.0, 5.0, 20.0, 10.0));
+        assert!(!pointer_in_pane((9.9, 10.5), 10.0, 5.0, 20.0, 10.0));
+        assert!(!pointer_in_pane((10.0, 15.0), 10.0, 5.0, 20.0, 10.0));
+        assert!(!pointer_in_pane((-0.1, 0.0), 0.0, 0.0, 20.0, 10.0));
     }
 }
