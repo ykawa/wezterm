@@ -39,6 +39,7 @@ impl super::TermWindow {
             &border,
             top_bar + top + border.top.get() as f32,
         );
+        let rect = self.floating_pane_outer_rect(rect);
         (
             rect.origin.x as f64,
             rect.origin.y as f64,
@@ -759,7 +760,7 @@ impl super::TermWindow {
             match hovered {
                 Some(pos) => vec![pos],
                 None => {
-                    if matches!(&event.kind, WMEK::Press(_)) {
+                    if !is_already_captured && matches!(&event.kind, WMEK::Press(_)) {
                         let mux = Mux::get();
                         if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
                             mux.set_floating_pane_visibility(tab.tab_id(), false).ok();

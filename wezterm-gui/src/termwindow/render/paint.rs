@@ -304,7 +304,12 @@ impl crate::TermWindow {
         }
 
         if self.show_tab_bar {
-            self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+            // Keep tab controls above floating backgrounds/borders at the
+            // viewport edge, matching UI hit testing.
+            let tab_layer = self.render_state.as_ref().unwrap().layer_for_zindex(3)?;
+            let mut tab_layers = tab_layer.quad_allocator();
+            self.paint_tab_bar(&mut tab_layers)
+                .context("paint_tab_bar")?;
         }
 
         self.paint_window_borders(&mut layers)
