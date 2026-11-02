@@ -1,8 +1,8 @@
 # Arch Linux package
 
 `wezterm-floating` packages the floating-pane fork as a replacement for stock
-WezTerm. The PKGBUILD pins the merged application source to commit
-`1fa582798f7e7508f5f92a7f00e40eeff5a2c96c`.
+WezTerm. The PKGBUILD pins the application source to commit
+`2da5ac5fe0ace33bf69b290b10cf7cc4ff490316`.
 
 ## Install on another PC
 
@@ -12,7 +12,7 @@ GitHub Release into the same directory, then run:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-sudo pacman -U ./wezterm-floating-20261102.1fa582798-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wezterm-floating-20261102.3.g2da5ac5fe-1-x86_64.pkg.tar.zst
 ```
 
 Accept replacement of an existing WezTerm package. This package provides
@@ -38,6 +38,10 @@ retained; floating-pane settings are opt-in. For example:
 
 ```lua
 config.keys = {
+  { key = 'LeftArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Left', 5 } },
+  { key = 'RightArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Right', 5 } },
+  { key = 'UpArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Up', 5 } },
+  { key = 'DownArrow', mods = 'CTRL|ALT|SHIFT', action = wezterm.action.AdjustPaneSize { 'Down', 5 } },
   {
     key = 'p', mods = 'CTRL|SHIFT',
     action = wezterm.action.ToggleFloatingPane,
@@ -45,7 +49,14 @@ config.keys = {
 }
 ```
 
-Merge this entry into an existing key table rather than replacing other keys.
+Merge these entries into an existing key table rather than replacing other keys.
+While a floating pane is visible, Left/Up shrink and Right/Down expand it.
+Each pane retains its size across hiding and mux reconnects. Window size bounds
+are enforced without discarding the requested size. When a tiled pane is active,
+these shortcuts continue to resize normal splits. Mouse drag resizing is not implemented.
+
+This release uses mux codec 48. Fully restart old GUI and mux-server processes
+after saving session work; codec 47 processes cannot connect to this version.
 You can also open a floating shell from inside the fork's GUI:
 
 ```sh

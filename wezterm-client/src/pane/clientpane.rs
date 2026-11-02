@@ -389,6 +389,30 @@ impl Pane for ClientPane {
         inner.update_last_send();
     }
 
+    fn adjust_floating_pane_size(
+        &self,
+        direction: config::keyassignment::PaneDirection,
+        amount: usize,
+    ) -> bool {
+        let client = Arc::clone(&self.client);
+        let pane_id = self.remote_pane_id;
+        promise::spawn::spawn(async move {
+            if let Err(err) = client
+                .client
+                .adjust_pane_size(AdjustPaneSize {
+                    pane_id,
+                    direction,
+                    amount,
+                })
+                .await
+            {
+                log::error!("Failed to resize floating pane {}: {:#}", pane_id, err);
+            }
+        })
+        .detach();
+        true
+    }
+
     fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
         let render = self.renderable.lock();
         let mut inner = render.inner.borrow_mut();

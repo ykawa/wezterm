@@ -46,6 +46,7 @@ struct TabInner {
     zoomed: Option<Arc<dyn Pane>>,
     title: String,
     floating_panes: Vec<Arc<dyn Pane>>,
+    floating_pane_sizes: HashMap<PaneId, (usize, usize)>,
     active_floating_pane: usize,
     floating_pane_visible: bool,
     recency: Recency,
@@ -270,6 +271,7 @@ fn pane_tree(
                 is_active_pane: is_pane(pane, &active),
                 is_zoomed_pane: is_pane(pane, &zoomed),
                 is_floating_pane: false,
+                floating_pane_size: None,
                 size: TerminalSize {
                     cols: dims.cols,
                     rows: dims.viewport_rows,
@@ -668,6 +670,28 @@ impl Tab {
         self.inner.lock().adjust_pane_size(direction, amount)
     }
 
+    pub fn adjust_floating_pane_size(
+        &self,
+        pane_id: PaneId,
+        direction: PaneDirection,
+        amount: usize,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .lock()
+            .adjust_floating_pane_size(pane_id, direction, amount)
+    }
+
+    pub fn adjust_tiled_pane_size(
+        &self,
+        pane_id: PaneId,
+        direction: PaneDirection,
+        amount: usize,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .lock()
+            .adjust_tiled_pane_size(pane_id, direction, amount)
+    }
+
     /// Activate an adjacent pane in the specified direction.
     /// In cases where there are multiple adjacent panes in the
     /// intended direction, we take the pane that has the largest
@@ -833,6 +857,7 @@ impl TabInner {
             title: String::new(),
             recency: Recency::default(),
             floating_panes: vec![],
+            floating_pane_sizes: HashMap::new(),
             active_floating_pane: 0,
             floating_pane_visible: false,
         }
@@ -885,10 +910,16 @@ impl TabInner {
         self.active_floating_pane = root.active_floating_pane_index;
         self.floating_pane_visible = root.floating_pane_visible;
         self.floating_panes.clear();
+        self.floating_pane_sizes.clear();
         for pane_node in root.floating_panes {
             if let PaneNode::Leaf(entry) = pane_node {
                 let is_zoomed = entry.is_zoomed_pane;
+                let requested_size = entry.floating_pane_size;
                 let floating_pane = make_pane(entry);
+                if let Some(size) = requested_size {
+                    self.floating_pane_sizes
+                        .insert(floating_pane.pane_id(), size);
+                }
                 if is_zoomed {
                     zoomed = Some(Arc::clone(&floating_pane))
                 }
@@ -965,6 +996,10 @@ impl TabInner {
                 is_active_pane: i == self.active_floating_pane && self.floating_pane_visible,
                 is_zoomed_pane: is_pane(floating_pane, &zoomed),
                 is_floating_pane: true,
+                floating_pane_size: self
+                    .floating_pane_sizes
+                    .get(&floating_pane.pane_id())
+                    .copied(),
                 workspace: workspace.to_string(),
                 cursor_pos,
                 physical_top: 0,
@@ -1101,7 +1136,7 @@ impl TabInner {
         if self.floating_pane_visible && self.active_floating_pane < self.floating_panes.len() {
             let floating_pane = &self.floating_panes[self.active_floating_pane];
             let root_size = self.size;
-            let size = self.compute_floating_pane_size(self.size);
+            let size = self.floating_pane_size(floating_pane.pane_id(), self.size);
 
             let left = root_size.cols.saturating_sub(size.cols) / 2;
             let top = root_size.rows.saturating_sub(size.rows) / 2;
@@ -1347,9 +1382,10 @@ impl TabInner {
             return;
         }
 
-        let floating_pane_size = self.compute_floating_pane_size(size);
         for floating_pane in &self.floating_panes {
-            floating_pane.resize(floating_pane_size).ok();
+            floating_pane
+                .resize(self.floating_pane_size(floating_pane.pane_id(), size))
+                .ok();
         }
 
         if let Some(zoomed) = &self.zoomed {
@@ -1588,7 +1624,44 @@ impl TabInner {
         if self.zoomed.is_some() {
             return;
         }
-        let active_index = self.active;
+        if self.is_floating_pane_active() {
+            let pane = Arc::clone(&self.floating_panes[self.active_floating_pane]);
+            if !pane.adjust_floating_pane_size(direction, amount) {
+                if let Err(err) = self.adjust_floating_pane_size(pane.pane_id(), direction, amount)
+                {
+                    log::error!("Failed to resize floating pane: {:#}", err);
+                }
+            }
+            return;
+        }
+        self.adjust_tiled_pane_size_at_index(self.active, direction, amount);
+    }
+
+    fn adjust_tiled_pane_size(
+        &mut self,
+        pane_id: PaneId,
+        direction: PaneDirection,
+        amount: usize,
+    ) -> anyhow::Result<()> {
+        if self.zoomed.is_some() {
+            return Ok(());
+        }
+        let pane_index = self
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .find(|pane| pane.pane.pane_id() == pane_id)
+            .map(|pane| pane.index)
+            .ok_or_else(|| anyhow::anyhow!("pane {} is not tiled", pane_id))?;
+        self.adjust_tiled_pane_size_at_index(pane_index, direction, amount);
+        Ok(())
+    }
+
+    fn adjust_tiled_pane_size_at_index(
+        &mut self,
+        active_index: usize,
+        direction: PaneDirection,
+        amount: usize,
+    ) {
         let mut cursor = self.pane.take().unwrap().cursor();
         let mut index = 0;
 
@@ -2026,7 +2099,8 @@ impl TabInner {
         // Remove from the end so that earlier indices remain valid. Keep all
         // removals, including panes after the active pane.
         for &index in floating_pane_indices_to_remove.iter().rev() {
-            self.floating_panes.remove(index);
+            let removed = self.floating_panes.remove(index);
+            self.floating_pane_sizes.remove(&removed.pane_id());
         }
         let new_active = active_floating_index
             .saturating_sub(removed_before_active)
@@ -2281,6 +2355,7 @@ impl TabInner {
 
         let prior = self.get_active_pane();
         let result = self.floating_panes.remove(index);
+        self.floating_pane_sizes.remove(&result.pane_id());
         if self
             .zoomed
             .as_ref()
@@ -2321,6 +2396,75 @@ impl TabInner {
 
     fn compute_floating_pane_size2(&self) -> TerminalSize {
         self.compute_floating_pane_size(self.size)
+    }
+
+    fn floating_pane_size(&self, pane_id: PaneId, root: TerminalSize) -> TerminalSize {
+        match self.floating_pane_sizes.get(&pane_id) {
+            Some(&(cols, rows)) => Self::floating_size_in_cells(root, cols, rows),
+            None => self.compute_floating_pane_size(root),
+        }
+    }
+
+    fn floating_size_in_cells(root: TerminalSize, cols: usize, rows: usize) -> TerminalSize {
+        let cols = cols.clamp(1, root.cols.max(1));
+        let rows = rows.clamp(1, root.rows.max(1));
+        TerminalSize {
+            cols,
+            rows,
+            pixel_width: root.pixel_width.saturating_mul(cols) / root.cols.max(1),
+            pixel_height: root.pixel_height.saturating_mul(rows) / root.rows.max(1),
+            dpi: root.dpi,
+        }
+    }
+
+    fn adjust_floating_pane_size(
+        &mut self,
+        pane_id: PaneId,
+        direction: PaneDirection,
+        amount: usize,
+    ) -> anyhow::Result<()> {
+        if self.zoomed.is_some() {
+            anyhow::bail!("cannot resize a floating pane while zoomed");
+        }
+        let (_, pane) = self
+            .get_floating_pane_by_pane_id(pane_id)
+            .ok_or_else(|| anyhow::anyhow!("pane {} is not floating", pane_id))?;
+        let dimensions = pane.get_dimensions();
+        let previous = TerminalSize {
+            rows: dimensions.viewport_rows,
+            cols: dimensions.cols,
+            pixel_width: dimensions.pixel_width,
+            pixel_height: dimensions.pixel_height,
+            dpi: dimensions.dpi,
+        };
+        let (mut cols, mut rows) = self
+            .floating_pane_sizes
+            .get(&pane_id)
+            .copied()
+            .unwrap_or((previous.cols, previous.rows));
+        match direction {
+            PaneDirection::Right => cols = cols.saturating_add(amount),
+            PaneDirection::Left => cols = cols.saturating_sub(amount),
+            PaneDirection::Down => rows = rows.saturating_add(amount),
+            PaneDirection::Up => rows = rows.saturating_sub(amount),
+            _ => anyhow::bail!("floating resize requires an arrow direction"),
+        }
+        cols = cols.max(1);
+        rows = rows.max(1);
+        let size = Self::floating_size_in_cells(self.size, cols, rows);
+        if let Err(err) = pane.resize(size) {
+            if let Err(restore_err) = pane.resize(previous) {
+                log::error!(
+                    "Failed to restore floating pane {} size: {:#}",
+                    pane_id,
+                    restore_err
+                );
+            }
+            return Err(err.context("floating resize failed; size setting unchanged"));
+        }
+        self.floating_pane_sizes.insert(pane_id, (cols, rows));
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+        Ok(())
     }
 
     fn compute_floating_pane_size(&self, root_size: TerminalSize) -> TerminalSize {
@@ -2682,6 +2826,8 @@ pub struct PaneEntry {
     pub is_active_pane: bool,
     pub is_zoomed_pane: bool,
     pub is_floating_pane: bool,
+    /// Requested floating size in terminal cells, independent of window clamping.
+    pub floating_pane_size: Option<(usize, usize)>,
     pub workspace: String,
     pub cursor_pos: StableCursorPosition,
     pub physical_top: StableRowIndex,
@@ -2806,7 +2952,16 @@ mod test {
         }
 
         fn get_dimensions(&self) -> RenderableDimensions {
-            unimplemented!();
+            let size = *self.size.lock();
+            RenderableDimensions {
+                cols: size.cols,
+                viewport_rows: size.rows,
+                scrollback_rows: size.rows,
+                dpi: size.dpi,
+                pixel_width: size.pixel_width,
+                pixel_height: size.pixel_height,
+                ..Default::default()
+            }
         }
 
         fn get_title(&self) -> String {
@@ -2925,6 +3080,209 @@ mod test {
         assert!(Arc::ptr_eq(&floating, &same_pane));
         assert_eq!(*target.resize_attempts.lock(), 1);
         assert!(tab.floating_pane_is_visible());
+    }
+
+    #[test]
+    fn floating_resize_is_per_pane_and_preserves_tiled_layout() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        let size = tab.get_active_floating_pane().unwrap();
+        let tiled = format!("{:?}", tab.iter_panes_ignoring_zoom());
+        let other = FakePane::new(402, tab.compute_floating_pane_size());
+        tab.append_floating_pane(other);
+        tab.set_active_floating_pane(0);
+        tab.adjust_pane_size(PaneDirection::Right, 5);
+        tab.adjust_pane_size(PaneDirection::Down, 3);
+        let resized = tab.get_active_floating_pane().unwrap();
+        assert_eq!(resized.width, size.width + 5);
+        assert_eq!(resized.height, size.height + 3);
+        assert_eq!(resized.pixel_width, resized.width * 10);
+        assert_eq!(tiled, format!("{:?}", tab.iter_panes_ignoring_zoom()));
+        tab.set_floating_pane_visibility(false);
+        tab.set_floating_pane_visibility(true);
+        assert_eq!(tab.get_active_floating_pane().unwrap().width, resized.width);
+        tab.set_active_floating_pane(1);
+        assert_eq!(tab.get_active_floating_pane().unwrap().width, size.width);
+    }
+
+    #[test]
+    fn floating_resize_clamps_and_remembers_size_across_window_resize() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        let root = tab.get_size();
+        tab.adjust_pane_size(PaneDirection::Right, usize::MAX);
+        tab.adjust_pane_size(PaneDirection::Down, usize::MAX);
+        assert_eq!(tab.get_active_floating_pane().unwrap().width, root.cols);
+        let smaller = TerminalSize {
+            cols: 20,
+            rows: 10,
+            pixel_width: 200,
+            pixel_height: 250,
+            ..root
+        };
+        tab.resize(smaller);
+        assert_eq!(tab.get_active_floating_pane().unwrap().width, smaller.cols);
+        tab.resize(root);
+        assert_eq!(tab.get_active_floating_pane().unwrap().width, root.cols);
+        tab.adjust_pane_size(PaneDirection::Left, usize::MAX);
+        tab.adjust_pane_size(PaneDirection::Up, usize::MAX);
+        let pos = tab.get_active_floating_pane().unwrap();
+        assert_eq!((pos.width, pos.height), (1, 1));
+        tab.adjust_pane_size(PaneDirection::Right, 1);
+        tab.adjust_pane_size(PaneDirection::Down, 1);
+        let pos = tab.get_active_floating_pane().unwrap();
+        assert_eq!((pos.width, pos.height), (2, 2));
+    }
+
+    #[test]
+    fn first_floating_resize_starts_from_pane_dimensions() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        *target.size.lock() = TerminalSize {
+            cols: 40,
+            rows: 10,
+            pixel_width: 400,
+            pixel_height: 250,
+            ..tab.get_size()
+        };
+
+        tab.adjust_floating_pane_size(target.id, PaneDirection::Right, 5)
+            .unwrap();
+
+        let size = *target.size.lock();
+        assert_eq!((size.cols, size.rows), (45, 10));
+        assert_eq!(tab.inner.lock().floating_pane_sizes[&target.id], (45, 10));
+    }
+
+    #[test]
+    fn floating_resize_preserves_requested_size_when_window_clamps_it() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        let root = tab.get_size();
+        tab.inner
+            .lock()
+            .floating_pane_sizes
+            .insert(target.id, (70, 20));
+        let smaller = TerminalSize {
+            cols: 40,
+            rows: 10,
+            pixel_width: 400,
+            pixel_height: 250,
+            ..root
+        };
+        tab.resize(smaller);
+
+        tab.adjust_floating_pane_size(target.id, PaneDirection::Down, 3)
+            .unwrap();
+        let size = *target.size.lock();
+        assert_eq!((size.cols, size.rows), (40, 10));
+        assert_eq!(tab.inner.lock().floating_pane_sizes[&target.id], (70, 23));
+
+        tab.resize(root);
+        let size = *target.size.lock();
+        assert_eq!((size.cols, size.rows), (70, 23));
+    }
+
+    #[test]
+    fn targeted_tiled_resize_does_not_resize_active_floating_pane() {
+        let (tab, floating) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(floating.id).unwrap();
+        let root = tab.get_size();
+        let added = FakePane::new(
+            402,
+            TerminalSize {
+                rows: 12,
+                cols: 40,
+                pixel_width: 400,
+                pixel_height: 300,
+                ..root
+            },
+        );
+        tab.split_and_insert(0, SplitRequest::default(), added)
+            .unwrap();
+        tab.set_floating_pane_visibility(true);
+        let tiled_before = tab
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .find(|pane| pane.pane.pane_id() == 400)
+            .unwrap();
+        let floating_size = *floating.size.lock();
+
+        tab.adjust_tiled_pane_size(400, PaneDirection::Right, 3)
+            .unwrap();
+
+        let tiled_after = tab
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .find(|pane| pane.pane.pane_id() == 400)
+            .unwrap();
+        assert_eq!(tiled_after.width, tiled_before.width + 3);
+        assert_eq!(*floating.size.lock(), floating_size);
+    }
+
+    #[test]
+    fn failed_floating_resize_keeps_size_and_cleans_override_on_removal() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        tab.adjust_floating_pane_size(target.id, PaneDirection::Right, 5)
+            .unwrap();
+        let old_size = *target.size.lock();
+        let old_override = tab.inner.lock().floating_pane_sizes[&target.id];
+        *target.resize_failures.lock() = 1;
+        assert!(tab
+            .adjust_floating_pane_size(target.id, PaneDirection::Down, 5)
+            .is_err());
+        assert_eq!(*target.size.lock(), old_size);
+        assert_eq!(
+            tab.inner.lock().floating_pane_sizes[&target.id],
+            old_override
+        );
+        tab.remove_floating_pane(0).unwrap();
+        assert!(!tab
+            .inner
+            .lock()
+            .floating_pane_sizes
+            .contains_key(&target.id));
+    }
+
+    #[test]
+    fn synced_floating_resize_maps_remote_size_to_local_pane_id() {
+        let (tab, _) = tiled_conversion_fixture();
+        let root = tab.get_size();
+        let entry = |id, requested: Option<(usize, usize)>| {
+            PaneNode::Leaf(PaneEntry {
+                window_id: 0,
+                tab_id: 0,
+                pane_id: id,
+                title: String::new(),
+                size: root,
+                working_dir: None,
+                workspace: String::new(),
+                is_active_pane: requested.is_some(),
+                is_zoomed_pane: false,
+                is_floating_pane: requested.is_some(),
+                floating_pane_size: requested,
+                cursor_pos: StableCursorPosition::default(),
+                physical_top: 0,
+                top_row: 0,
+                left_col: 0,
+                tty_name: None,
+            })
+        };
+        tab.sync_with_pane_tree(
+            root,
+            TabEntry {
+                panes: entry(400, None),
+                floating_panes: vec![entry(401, Some((70, 20)))],
+                active_floating_pane_index: 0,
+                floating_pane_visible: true,
+            },
+            |remote| FakePane::new(remote.pane_id + 1000, remote.size),
+        );
+        let pos = tab.get_active_floating_pane().unwrap();
+        assert_eq!(pos.pane.pane_id(), 1401);
+        assert_eq!((pos.width, pos.height), (70, 20));
+        assert_eq!(tab.inner.lock().floating_pane_sizes[&1401], (70, 20));
     }
 
     #[test]
