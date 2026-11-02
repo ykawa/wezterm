@@ -1060,10 +1060,12 @@ impl SessionHandler {
                                 }
                             };
 
-                            if tab.get_floating_pane_by_pane_id(pane_id).is_some() {
-                                tab.adjust_floating_pane_size(pane_id, direction, amount)?;
+                            if let Some((_, pane)) = tab.get_floating_pane_by_pane_id(pane_id) {
+                                if !pane.adjust_floating_pane_size(direction, amount) {
+                                    tab.adjust_floating_pane_size(pane_id, direction, amount)?;
+                                }
                             } else {
-                                tab.adjust_pane_size(direction, amount);
+                                tab.adjust_tiled_pane_size(pane_id, direction, amount)?;
                             }
                             Ok(Pdu::UnitResponse(UnitResponse {}))
                         },
