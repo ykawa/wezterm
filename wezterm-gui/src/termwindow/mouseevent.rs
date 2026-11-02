@@ -684,32 +684,34 @@ impl super::TermWindow {
             Some(MouseCapture::TerminalPane(_))
         );
 
-        let panes = if let Some(floating_pane) = self.get_floating_pane_to_render() {
-            let mouse_in_floating_pane = position.column >= floating_pane.left
-                && position.column <= floating_pane.left + floating_pane.width
-                && position.row as usize >= floating_pane.top
-                && position.row as usize <= floating_pane.top + floating_pane.height;
-
-            if !mouse_in_floating_pane && !is_already_captured {
-                let mux = Mux::get();
-                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
-                    //Hide floating pane if mouse is clicked outside the floating pane
-                    match &event.kind {
-                        WMEK::Press(_) => {
+        let floating_panes = self.get_floating_panes_to_render();
+        let panes = if floating_panes.is_empty() {
+            self.get_panes_to_render()
+        } else {
+            // Hit-test front to back, matching the paint order. A captured drag
+            // must keep targeting its original pane even outside its bounds.
+            let hovered = floating_panes.into_iter().rev().find(|pos| {
+                if is_already_captured {
+                    pos.pane.pane_id() == pane.pane_id()
+                } else {
+                    position.column >= pos.left
+                        && position.column < pos.left + pos.width
+                        && position.row >= pos.top as i64
+                        && position.row < (pos.top + pos.height) as i64
+                }
+            });
+            match hovered {
+                Some(pos) => vec![pos],
+                None => {
+                    if matches!(&event.kind, WMEK::Press(_)) {
+                        let mux = Mux::get();
+                        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
                             mux.set_floating_pane_visibility(tab.tab_id(), false).ok();
                         }
-                        _ => {}
                     }
+                    return;
                 }
-
-                // Non click mouse events are not dispatched to the other panes when a floating
-                // pane is active. This is to prevent users from triggering unexpected
-                // behavior on one of the non-floating panes.
-                return;
             }
-            vec![floating_pane]
-        } else {
-            self.get_panes_to_render()
         };
 
         for pos in panes {
@@ -725,7 +727,13 @@ impl super::TermWindow {
                         WMEK::Press(_) => {
                             let mux = Mux::get();
                             mux.get_active_tab_for_window(self.mux_window_id)
-                                .map(|tab| tab.set_active_idx(pos.index));
+                                .map(|tab| {
+                                    if pos.is_floating {
+                                        tab.set_active_floating_pane(pos.index);
+                                    } else {
+                                        tab.set_active_idx(pos.index);
+                                    }
+                                });
 
                             pane = Arc::clone(&pos.pane);
                             is_click_to_focus_pane = true;
@@ -734,7 +742,13 @@ impl super::TermWindow {
                             if self.config.pane_focus_follows_mouse {
                                 let mux = Mux::get();
                                 mux.get_active_tab_for_window(self.mux_window_id)
-                                    .map(|tab| tab.set_active_idx(pos.index));
+                                    .map(|tab| {
+                                        if pos.is_floating {
+                                            tab.set_active_floating_pane(pos.index);
+                                        } else {
+                                            tab.set_active_idx(pos.index);
+                                        }
+                                    });
 
                                 pane = Arc::clone(&pos.pane);
                                 context.invalidate();

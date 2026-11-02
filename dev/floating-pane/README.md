@@ -79,3 +79,13 @@ cat /tmp/wezterm-floating-smoke.json
 
 This is an experimental development build. Remote mux interoperability, all
 rendering backends, and cross-platform behavior need further validation.
+
+## Multiple floating panes
+
+All floating panes remain visible while floating mode is shown. The focused
+pane is painted in front; use Alt+Left/Right or click an exposed pane to focus
+it. Newly created panes start centered and may cover earlier panes until moved
+with `MoveFloatingPane`. ToggleFloatingPane hides or shows the group. Only the
+focused pane displays the IME preedit text and active cursor. Closing a focused
+floating pane with `exit` or Ctrl+D focuses a remaining floating pane and keeps
+the group visible; closing the last one returns focus to the tiled pane.
