@@ -595,6 +595,22 @@ impl Tab {
         self.inner.lock().get_floating_pane_by_pane_id(pane_id)
     }
 
+    /// Visible floating panes in paint order, with the focused pane last.
+    pub fn get_visible_floating_panes(&self) -> Vec<PositionedPane> {
+        let inner = self.inner.lock();
+        if !inner.floating_pane_is_visible() {
+            return vec![];
+        }
+        let mut panes = Vec::new();
+        for index in 0..inner.floating_panes.len() {
+            if let Some(pane) = inner.positioned_floating_pane(index) {
+                panes.push(pane);
+            }
+        }
+        panes.sort_by_key(|pane| pane.is_active);
+        panes
+    }
+
     pub fn get_active_floating_pane(&self) -> Option<PositionedPane> {
         self.inner.lock().get_active_floating_pane()
     }
@@ -1155,37 +1171,32 @@ impl TabInner {
     }
 
     fn get_active_floating_pane(&self) -> Option<PositionedPane> {
-        //Even if the zoomed pane is a floating pane. Not returning it since it is currently
-        //not visible as a floating pane, instead as a zoomed pane
-        if self.zoomed.is_some() {
+        self.positioned_floating_pane(self.active_floating_pane)
+    }
+
+    fn positioned_floating_pane(&self, index: usize) -> Option<PositionedPane> {
+        if !self.floating_pane_is_visible() {
             return None;
         }
-
-        if self.floating_pane_visible && self.active_floating_pane < self.floating_panes.len() {
-            let floating_pane = &self.floating_panes[self.active_floating_pane];
-            let root_size = self.size;
-            let dimensions = floating_pane.get_dimensions();
-            let size =
-                Self::floating_size_in_cells(root_size, dimensions.cols, dimensions.viewport_rows);
-
-            let (left, top) = self.floating_pane_position(floating_pane.pane_id(), root_size, size);
-
-            Some(PositionedPane {
-                index: 0,
-                is_active: true,
-                is_zoomed: false,
-                is_floating: true,
-                left,
-                top,
-                width: size.cols,
-                height: size.rows,
-                pixel_width: size.pixel_width,
-                pixel_height: size.pixel_height,
-                pane: Arc::clone(floating_pane),
-            })
-        } else {
-            None
-        }
+        let floating_pane = self.floating_panes.get(index)?;
+        let root_size = self.size;
+        let dimensions = floating_pane.get_dimensions();
+        let size =
+            Self::floating_size_in_cells(root_size, dimensions.cols, dimensions.viewport_rows);
+        let (left, top) = self.floating_pane_position(floating_pane.pane_id(), root_size, size);
+        Some(PositionedPane {
+            index,
+            is_active: index == self.active_floating_pane,
+            is_zoomed: false,
+            is_floating: true,
+            left,
+            top,
+            width: size.cols,
+            height: size.rows,
+            pixel_width: size.pixel_width,
+            pixel_height: size.pixel_height,
+            pane: Arc::clone(floating_pane),
+        })
     }
 
     /// Like iter_panes, except that it will include all panes, regardless of
@@ -2097,7 +2108,6 @@ impl TabInner {
         }
 
         let mut floating_pane_indices_to_remove = Vec::new();
-        let mut active_floating_pane_dead = false;
 
         for (i, floating_pane) in self.floating_panes.iter().enumerate() {
             if floating_pane.is_dead() || f(0, floating_pane) {
@@ -2106,18 +2116,7 @@ impl TabInner {
                 if Some(floating_pane.pane_id()) == zoomed_pane {
                     self.zoomed.take();
                 }
-                if (i == self.active_floating_pane) {
-                    active_floating_pane_dead = true;
-                }
             }
-        }
-
-        if active_floating_pane_dead && self.floating_pane_visible {
-            self.floating_pane_visible = false;
-            Mux::get().notify(MuxNotification::FloatingPaneVisibilityChanged {
-                tab_id: self.id,
-                visible: false,
-            });
         }
 
         let active_floating_index = self.active_floating_pane;
@@ -2144,6 +2143,13 @@ impl TabInner {
         }
         if self.floating_panes.is_empty() {
             self.active_floating_pane = 0;
+            if self.floating_pane_visible {
+                self.floating_pane_visible = false;
+                Mux::get().notify(MuxNotification::FloatingPaneVisibilityChanged {
+                    tab_id: self.id,
+                    visible: false,
+                });
+            }
         }
         self.advise_focus_change(prior_active_pane);
 
@@ -3191,6 +3197,43 @@ mod test {
     }
 
     #[test]
+    fn visible_floating_panes_preserve_geometry_and_put_focus_last() {
+        let (tab, target) = tiled_conversion_fixture();
+        tab.move_pane_to_floating_pane(target.id).unwrap();
+        tab.move_floating_pane(target.id, PaneDirection::Left, 3)
+            .unwrap();
+        let first = tab.get_active_floating_pane().unwrap();
+        let terminal_size = *target.size.lock();
+        tab.append_floating_pane(FakePane::new(402, terminal_size));
+        let panes = tab.get_visible_floating_panes();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].pane.pane_id(), target.id);
+        assert_eq!((panes[0].left, panes[0].top), (first.left, first.top));
+        assert!(!panes[0].is_active);
+        assert_eq!(panes[1].pane.pane_id(), 402);
+        assert!(panes[1].is_active);
+        // Focus changes reorder painting without changing stable pane indices.
+        tab.set_active_floating_pane(0);
+        let panes = tab.get_visible_floating_panes();
+        assert_eq!(panes[0].index, 1);
+        assert!(!panes[0].is_active);
+        assert_eq!(panes[1].index, 0);
+        assert!(panes[1].is_active);
+        tab.set_floating_pane_visibility(false);
+        assert!(tab.get_visible_floating_panes().is_empty());
+        tab.set_floating_pane_visibility(true);
+        assert_eq!(tab.get_visible_floating_panes().len(), 2);
+        tab.toggle_zoom();
+        assert!(tab.get_visible_floating_panes().is_empty());
+        tab.toggle_zoom();
+        tab.remove_floating_pane(0).unwrap();
+        let panes = tab.get_visible_floating_panes();
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].pane.pane_id(), 402);
+        assert!(panes[0].is_active);
+    }
+
+    #[test]
     fn floating_movement_is_per_pane_without_resizing_terminals() {
         let (tab, target) = tiled_conversion_fixture();
         tab.move_pane_to_floating_pane(target.id).unwrap();
@@ -3602,6 +3645,45 @@ mod test {
         let same_pane: Arc<dyn Pane> = target.clone();
         assert!(Arc::ptr_eq(&floating, &same_pane));
         assert!(tab.floating_pane_is_visible());
+    }
+
+    #[test]
+    fn pruning_focused_floating_pane_keeps_remaining_panes_visible() {
+        let mux = Arc::new(Mux::new(None));
+        Mux::set_mux(&mux);
+        let size = TerminalSize::default();
+        // Exercise closing the first, middle and last focused pane, as well
+        // as removing several panes in the same prune pass (shell exits).
+        for (active, removed, expected) in [
+            (0, vec![101], 102),
+            (1, vec![102], 103),
+            (2, vec![103], 102),
+            (1, vec![101, 102], 103),
+        ] {
+            let tab = Tab::new(&size);
+            tab.assign_pane(&FakePane::new(100, size));
+            let mut inner = tab.inner.lock();
+            for id in 101..104 {
+                inner.floating_panes.push(FakePane::new(id, size));
+            }
+            inner.active_floating_pane = active;
+            inner.floating_pane_visible = true;
+            inner.remove_pane_if(|_, pane| removed.contains(&pane.pane_id()), false);
+            assert!(inner.floating_pane_visible);
+            assert_eq!(inner.get_active_pane().unwrap().pane_id(), expected);
+            // Only closing the final floating pane restores tiled focus.
+            inner.remove_pane_if(|_, pane| pane.pane_id() != 100, false);
+            assert!(!inner.floating_pane_visible);
+            assert_eq!(inner.get_active_pane().unwrap().pane_id(), 100);
+        }
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(100, size));
+        let mut inner = tab.inner.lock();
+        inner.floating_panes.push(FakePane::new(101, size));
+        inner.floating_panes.push(FakePane::new(102, size));
+        // Pruning a hidden pane must not reveal the group.
+        inner.remove_pane_if(|_, pane| pane.pane_id() == 101, false);
+        assert!(!inner.floating_pane_visible);
     }
 
     #[test]

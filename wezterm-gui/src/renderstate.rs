@@ -455,6 +455,7 @@ pub struct RenderLayer {
     pub vb: RefCell<[TripleVertexBuffer; 3]>,
     context: RenderContext,
     zindex: i8,
+    sublayer: usize,
 }
 
 impl RenderLayer {
@@ -469,6 +470,7 @@ impl RenderLayer {
             context: context.clone(),
             vb: RefCell::new(vb),
             zindex,
+            sublayer: 0,
         })
     }
 
@@ -620,23 +622,41 @@ impl RenderState {
     }
 
     pub fn layer_for_zindex(&self, zindex: i8) -> anyhow::Result<Rc<RenderLayer>> {
+        self.layer_for_zindex_and_sublayer(zindex, 0)
+    }
+
+    /// Drop GPU buffers that belonged to floating panes no longer displayed.
+    pub fn retain_floating_sublayers(&self, visible_count: usize) {
+        self.layers
+            .borrow_mut()
+            .retain(|layer| layer.zindex != 2 || layer.sublayer < visible_count);
+    }
+
+    /// Keep each floating pane's background and text together when panes overlap.
+    pub fn layer_for_zindex_and_sublayer(
+        &self,
+        zindex: i8,
+        sublayer: usize,
+    ) -> anyhow::Result<Rc<RenderLayer>> {
         if let Some(layer) = self
             .layers
             .borrow()
             .iter()
-            .find(|l| l.zindex == zindex)
+            .find(|l| l.zindex == zindex && l.sublayer == sublayer)
             .map(Rc::clone)
         {
             return Ok(layer);
         }
 
-        let layer = Rc::new(RenderLayer::new(&self.context, 128, zindex)?);
+        let mut layer = RenderLayer::new(&self.context, 128, zindex)?;
+        layer.sublayer = sublayer;
+        let layer = Rc::new(layer);
         let mut layers = self.layers.borrow_mut();
         layers.push(Rc::clone(&layer));
 
         // Keep the layers sorted by zindex so that they are rendered in
         // the correct order when the layers array is iterated.
-        layers.sort_by(|a, b| a.zindex.cmp(&b.zindex));
+        layers.sort_by_key(|layer| (layer.zindex, layer.sublayer));
 
         Ok(layer)
     }

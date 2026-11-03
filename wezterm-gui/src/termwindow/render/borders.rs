@@ -151,6 +151,22 @@ impl crate::TermWindow {
         )
     }
 
+    pub fn floating_pane_outer_rect(
+        &self,
+        background: euclid::Rect<f32, window::PixelUnit>,
+    ) -> euclid::Rect<f32, window::PixelUnit> {
+        let border = self.get_floating_pane_border();
+        floating_outer_rect(
+            background,
+            (
+                border.left.get() as f32,
+                border.top.get() as f32,
+                border.right.get() as f32,
+                border.bottom.get() as f32,
+            ),
+        )
+    }
+
     pub fn paint_floating_pane_border(
         &mut self,
         pos: PositionedPane,
@@ -182,67 +198,54 @@ impl crate::TermWindow {
             top_pixel_y,
         );
 
-        let pos_y = background_rect.origin.y - floating_pane_border.top.get() as f32;
-        let pos_x = background_rect.origin.x - floating_pane_border.left.get() as f32;
-        let pixel_width = background_rect.size.width + floating_pane_border.left.get() as f32;
-        let pixel_height = background_rect.size.height + floating_pane_border.top.get() as f32;
-
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(
-                pos_x,
-                pos_y,
-                floating_pane_border.left.get() as f32,
-                pixel_height + floating_pane_border.top.get() as f32,
+        let outer = self.floating_pane_outer_rect(background_rect);
+        // Draw exactly the same outer extents used by pointer hit testing.
+        let rects = [
+            (
+                euclid::rect(
+                    outer.min_x(),
+                    outer.min_y(),
+                    floating_pane_border.left.get() as f32,
+                    outer.height(),
+                ),
+                config.left_color,
             ),
-            config
-                .left_color
-                .map(|c| c.to_linear())
-                .unwrap_or(os_border.color),
-        )?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(
-                pos_x + floating_pane_border.left.get() as f32,
-                pos_y,
-                pixel_width,
-                floating_pane_border.top.get() as f32,
+            (
+                euclid::rect(
+                    background_rect.min_x(),
+                    outer.min_y(),
+                    background_rect.width(),
+                    floating_pane_border.top.get() as f32,
+                ),
+                config.top_color,
             ),
-            config
-                .top_color
-                .map(|c| c.to_linear())
-                .unwrap_or(os_border.color),
-        )?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(
-                pos_x + floating_pane_border.left.get() as f32,
-                pos_y + pixel_height,
-                pixel_width,
-                floating_pane_border.bottom.get() as f32,
+            (
+                euclid::rect(
+                    background_rect.min_x(),
+                    background_rect.max_y(),
+                    background_rect.width(),
+                    floating_pane_border.bottom.get() as f32,
+                ),
+                config.bottom_color,
             ),
-            config
-                .bottom_color
-                .map(|c| c.to_linear())
-                .unwrap_or(os_border.color),
-        )?;
-        self.filled_rectangle(
-            layers,
-            2,
-            euclid::rect(
-                pos_x + pixel_width,
-                pos_y,
-                floating_pane_border.right.get() as f32,
-                pixel_height + floating_pane_border.top.get() as f32,
+            (
+                euclid::rect(
+                    background_rect.max_x(),
+                    outer.min_y(),
+                    floating_pane_border.right.get() as f32,
+                    outer.height(),
+                ),
+                config.right_color,
             ),
-            config
-                .right_color
-                .map(|c| c.to_linear())
-                .unwrap_or(os_border.color),
-        )?;
+        ];
+        for (rect, color) in rects.iter() {
+            self.filled_rectangle(
+                layers,
+                2,
+                *rect,
+                color.map(|c| c.to_linear()).unwrap_or(os_border.color),
+            )?;
+        }
 
         Ok(())
     }
@@ -351,5 +354,28 @@ impl crate::TermWindow {
             &self.dimensions,
             &self.render_metrics,
         )
+    }
+}
+
+fn floating_outer_rect(
+    background: euclid::Rect<f32, window::PixelUnit>,
+    widths: (f32, f32, f32, f32),
+) -> euclid::Rect<f32, window::PixelUnit> {
+    let (left, top, right, bottom) = widths;
+    euclid::rect(
+        background.min_x() - left,
+        background.min_y() - top,
+        background.width() + left + right,
+        background.height() + top + bottom,
+    )
+}
+
+#[cfg(test)]
+mod floating_border_tests {
+    #[test]
+    fn outer_bounds_include_asymmetric_borders() {
+        let bounds =
+            super::floating_outer_rect(euclid::rect(20.0, 30.0, 100.0, 50.0), (2.0, 3.0, 4.0, 5.0));
+        assert_eq!(bounds, euclid::rect(18.0, 27.0, 106.0, 58.0));
     }
 }

@@ -184,10 +184,6 @@ impl crate::TermWindow {
             .context("layer_for_zindex(0)")?;
         let mut layers = layer.quad_allocator();
 
-        let float_layer = gl_state
-            .layer_for_zindex(2)
-            .context("layer_for_zindex(2)")?;
-
         log::trace!("quad map elapsed {:?}", start.elapsed());
         metrics::histogram!("quad.map").record(start.elapsed());
 
@@ -254,10 +250,27 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
-        let floating_pane = self.get_floating_pane_to_render();
-        let mut floating_pane_layers = float_layer.quad_allocator();
-        for pos in panes {
-            if floating_pane.is_none() && pos.is_active {
+        let floating_panes = self.get_floating_panes_to_render();
+        self.render_state
+            .as_ref()
+            .unwrap()
+            .retain_floating_sublayers(floating_panes.len());
+        let floating_layers = (0..floating_panes.len())
+            .map(|order| {
+                self.render_state
+                    .as_ref()
+                    .unwrap()
+                    .layer_for_zindex_and_sublayer(2, order)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for mut pos in panes {
+            // The tiled pane retains its mux selection while a floating pane
+            // has focus. Render it as inactive so that its cursor and IME
+            // preedit do not duplicate the focused floating pane's input.
+            if !floating_panes.is_empty() {
+                pos.is_active = false;
+            }
+            if pos.is_active {
                 self.update_text_cursor(&pos);
                 if focused {
                     pos.pane.advise_focus();
@@ -267,11 +280,14 @@ impl crate::TermWindow {
             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
         }
 
-        if let Some(floating_pane) = floating_pane {
-            self.update_text_cursor(&floating_pane);
-            if focused {
-                floating_pane.pane.advise_focus();
-                mux::Mux::get().record_focus_for_current_identity(floating_pane.pane.pane_id());
+        for (floating_pane, float_layer) in floating_panes.into_iter().zip(floating_layers) {
+            let mut floating_pane_layers = float_layer.quad_allocator();
+            if floating_pane.is_active {
+                self.update_text_cursor(&floating_pane);
+                if focused {
+                    floating_pane.pane.advise_focus();
+                    mux::Mux::get().record_focus_for_current_identity(floating_pane.pane.pane_id());
+                }
             }
             self.paint_pane(&floating_pane, &mut floating_pane_layers)
                 .context("paint_pane")?;
@@ -288,7 +304,12 @@ impl crate::TermWindow {
         }
 
         if self.show_tab_bar {
-            self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+            // Keep tab controls above floating backgrounds/borders at the
+            // viewport edge, matching UI hit testing.
+            let tab_layer = self.render_state.as_ref().unwrap().layer_for_zindex(3)?;
+            let mut tab_layers = tab_layer.quad_allocator();
+            self.paint_tab_bar(&mut tab_layers)
+                .context("paint_tab_bar")?;
         }
 
         self.paint_window_borders(&mut layers)

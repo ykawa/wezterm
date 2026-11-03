@@ -2,7 +2,7 @@
 
 `wezterm-floating` packages the floating-pane fork as a replacement for stock
 WezTerm. The PKGBUILD pins the application source to commit
-`7623db759617ffc5862c4fec7b0722d4430de7b4`.
+`4eeaf63bebd0c5f15818b8e9088cf4b1e8d7d3df`.
 
 ## Install on another PC
 
@@ -12,7 +12,7 @@ GitHub Release into the same directory, then run:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-sudo pacman -U ./wezterm-floating-20261102.5.g7623db759-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wezterm-floating-20261103.7.g4eeaf63be-1-x86_64.pkg.tar.zst
 ```
 
 Accept replacement of an existing WezTerm package. This package provides
@@ -109,3 +109,13 @@ On the initial development PC, the installed nightly version was saved as:
 ```sh
 sudo pacman -U ~/.local/share/wezterm-floating/rollback/wezterm-nightly-bin-20261024-1-x86_64.pkg.tar.xz
 ```
+
+## Multiple floating panes
+
+All floating panes remain visible while floating mode is shown. The focused
+pane is painted in front; use Alt+Left/Right or click an exposed pane to focus
+it. Newly created panes start centered and may cover earlier panes until moved
+with `MoveFloatingPane`. ToggleFloatingPane hides or shows the group. Only the
+focused pane displays the IME preedit text and active cursor. Closing a focused
+floating pane with `exit` or Ctrl+D focuses a remaining floating pane and keeps
+the group visible; closing the last one returns focus to the tiled pane.

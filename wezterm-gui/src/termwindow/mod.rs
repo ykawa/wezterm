@@ -1436,10 +1436,12 @@ impl TermWindow {
             return tab_overlay.pane_id() == pane_id;
         }
 
-        if let Some(floating_pane) = tab.get_active_floating_pane() {
-            if floating_pane.pane.pane_id() == pane_id {
-                return true;
-            }
+        if tab
+            .get_visible_floating_panes()
+            .iter()
+            .any(|pos| pos.pane.pane_id() == pane_id)
+        {
+            return true;
         }
 
         tab.contains_pane(pane_id)
@@ -3644,11 +3646,11 @@ impl TermWindow {
         self.effective_right_padding(&self.config)
     }
 
-    fn get_floating_pane_to_render(&self) -> Option<PositionedPane> {
+    fn get_floating_panes_to_render(&self) -> Vec<PositionedPane> {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
-            None => return None,
+            None => return vec![],
         };
 
         if self
@@ -3658,21 +3660,26 @@ impl TermWindow {
             .map(|overlay| overlay.pane.clone())
             .is_some()
         {
-            return None;
+            return vec![];
         }
 
         if !tab.floating_pane_is_visible() {
-            return None;
+            return vec![];
         }
 
-        let mut pos = tab.get_active_floating_pane();
-        if let Some(ref mut pos) = pos {
+        let mut panes = tab.get_visible_floating_panes();
+        for pos in &mut panes {
             if let Some(overlay) = self.pane_state(pos.pane.pane_id()).overlay.as_ref() {
                 pos.pane = Arc::clone(&overlay.pane);
             }
         }
+        panes
+    }
 
-        pos
+    fn get_floating_pane_to_render(&self) -> Option<PositionedPane> {
+        self.get_floating_panes_to_render()
+            .into_iter()
+            .find(|pos| pos.is_active)
     }
 
     /// if pane_id.is_none(), removes any overlay for the specified tab.
