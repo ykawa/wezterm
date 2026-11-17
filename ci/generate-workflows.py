@@ -833,6 +833,8 @@ rustup default {toolchain}
             self.env["RUSTFLAGS"] = "-C target-feature=-crt-static"
         if "win" in self.name:
             self.env["RUSTUP_WINDOWS_PATH_ADD_BIN"] = "1"
+            # Keep rustc's dependency search paths below Windows' command-line limit.
+            self.env["CARGO_BUILD_BUILD_DIR"] = "D:/b"
         return
 
     def prep_environment(self, cache=True):
